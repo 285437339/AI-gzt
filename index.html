@@ -245,6 +245,39 @@ html[data-skin="dark"] .canvas-toolbar button,html[data-skin="dark"] .canvas-too
  <dialog class="template-name-dialog" id="templateNameDialog"><form method="dialog"><h3>新建模板</h3><label for="templateNameInput">模板名称</label><input id="templateNameInput" autocomplete="off" placeholder="例如：户外人像模板"><div class="template-name-actions"><button value="cancel" type="submit">取消</button><button id="templateNameConfirm" value="default" type="submit">确定</button></div></form></dialog>
  <dialog class="assistant-editor" id="assistantEditorDialog"><form id="assistantEditorForm"><h3 id="assistantEditorTitle">新建提示词</h3><label for="assistantEditorName">名称</label><input id="assistantEditorName" required maxlength="80" placeholder="例如：电商产品主图"><label for="assistantEditorCategory">分类</label><input id="assistantEditorCategory" required maxlength="40" placeholder="例如：常用"><label for="assistantEditorContent">提示词内容</label><textarea id="assistantEditorContent" required placeholder="输入完整提示词"></textarea><div class="assistant-editor-actions"><button id="assistantEditorCancel" type="button">取消</button><button type="submit">保存</button></div></form></dialog>
 <script>
+(() => {
+  if (!/^https?:$/.test(location.protocol)) return;
+  const meaningful = value => value !== null && value !== '' && value !== '[]' && value !== '{}';
+  try {
+    const request = new XMLHttpRequest();
+    request.open('GET', '/api/workbench-state', false);
+    request.send();
+    const stored = JSON.parse(request.responseText || '{}')?.state?.storage || {};
+    for (const [key, value] of Object.entries(stored)) {
+      if (!meaningful(localStorage.getItem(key)) && meaningful(value)) localStorage.setItem(key, value);
+    }
+  } catch {}
+  let timer = 0;
+  const persist = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      const storage = {};
+      for (let index = 0; index < localStorage.length; index += 1) {
+        const key = localStorage.key(index);
+        if (/^(aiWorkbench|refSlots$|reverseRefSlots$|grsaiKey$|grsaiUrl$|runninghubKey$|canvas)/.test(key)) storage[key] = localStorage.getItem(key);
+      }
+      fetch('/api/workbench-state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ state: { updatedAt: Date.now(), storage } }) }).catch(() => {});
+    }, 500);
+  };
+  const originalSetItem = Storage.prototype.setItem;
+  const originalRemoveItem = Storage.prototype.removeItem;
+  Storage.prototype.setItem = function(key, value) { originalSetItem.call(this, key, value); if (this === localStorage) persist(); };
+  Storage.prototype.removeItem = function(key) { originalRemoveItem.call(this, key); if (this === localStorage) persist(); };
+  addEventListener('DOMContentLoaded', persist, { once: true });
+  addEventListener('beforeunload', persist);
+})();
+</script>
+<script>
 var inspirationCategoryFilter={onchange:null},inspirationAddCategory={onclick:null};
 const schemas={person:[['人物以及服装',['人物特征','服装细节','动作姿态（包含身体角度，镜头里面的左右朝向）','产品佩戴方式']],['构图方式',['视角','布局','景深']],['核心产品',['产品名称','材质细节','关键标识']],['场景',['背景描述','场景元素']],['光影与质感',['光影设计','画面质感','整体配色','专业词汇']]],still:[['构图方式',['视角','布局','景深']],['核心产品',['产品名称','材质细节','关键标识']],['场景',['背景描述','场景元素']],['光影与质感',['光影设计','画面质感','整体配色','专业词汇']]]};
 const defaults={'人物特征':'亚洲年轻女性，五官精致立体，清冷高级脸，黑色微卷长发，清透自然妆容。','服装细节':'米白色工装衬衫外套，燕麦色针织长裙，松弛高级的户外 Quiet Luxury 风格。','动作姿态（包含身体角度，镜头里面的左右朝向）':'身体侧身四分之三朝向右侧，双手将包包捧于身前，头部微转向镜头。','产品佩戴方式':'右手握双提手，左手托住包底，产品位于身体前侧黄金视觉中心。','视角':'平视视角，中景镜头，聚焦人物上半身、手部与包包。','布局':'三分法构图，人物和包包位于中央偏左，右侧留出山水空间。','景深':'浅景深，主体清晰，背景溪流山峦柔和虚化。','产品名称':'复古深棕色皮质圆筒包 / 波士顿包。','材质细节':'高质感深棕色牛皮，细腻纹理与微弱哑光，浅金色金属配件。','关键标识':'包身中央立体抛光金色 R 字品牌 Logo。','背景描述':'宁静辽阔的荒野高原，薄雾山峦、浅滩溪流、鹅卵石与秋季草地。','场景元素':'流水、鹅卵石、枯黄草甸、远山、薄雾。','光影设计':'柔和自然散射光，头发与衣袖边缘有微微轮廓光。','画面质感':'胶片级时尚大片质感，皮革与织物纹理清晰，微弱胶片颗粒。','整体配色':'米白、燕麦、深棕为主，搭配枯黄草绿与冷灰蓝。','专业词汇':'Hasselblad photography, 85mm lens, f/2.8, soft diffused lighting, cinematic color grading, photorealistic.'};
@@ -336,7 +369,7 @@ const RUNNINGHUB_MODELS={'rhart-image-n-pro-official/text-to-image':{label:'Nano
 function runninghubModelConfig(model){return RUNNINGHUB_MODELS[model]||RUNNINGHUB_MODELS['rhart-image-n-pro/text-to-image']}
 function runninghubEndpoint(task,hasImages){const cfg=runninghubModelConfig(task.model);return hasImages?cfg.image:cfg.text}
 function runninghubBody(task,prompt,imageUrls){const cfg=runninghubModelConfig(task.model),dims=runninghubDimensions(task.size,task.ratio);if(cfg.kind==='seedream')return {prompt,imageUrls,...dims,sequentialImageGeneration:'disabled',maxImages:1};if(cfg.kind==='youchuan'){const body={prompt,aspectRatio:task.ratio};if(imageUrls?.length)body.imageUrl=imageUrls[0];return body}const body={prompt,aspectRatio:task.ratio,resolution:String(task.size||'1K').toLowerCase()};if(imageUrls?.length)body.imageUrls=imageUrls;return body}
-function updatePlatformUI(){const runninghub=platformValue()==='runninghub';grsaiSettings.hidden=runninghub;runninghubSettings.hidden=!runninghub;apiNote.textContent=runninghub?'RunningHub：可选 5 个图片模型；提示词反推使用 glm-5.3-flash。':'Grsai：使用现有图片生成与提示词反推模型。';$('#model').innerHTML=runninghub?Object.entries(RUNNINGHUB_MODELS).map(([value,cfg])=>`<option value="${value}">${cfg.label}</option>`).join(''):'<option value="nano-banana-2">nano-banana-2</option><option value="gpt-image-2-vip">gpt-image-2-vip</option>';updateRatioOptions();reverseModel.innerHTML=runninghub?'<option value="glm-5.3-flash">glm-5.3-flash</option>':'<option value="gemini-3.5-flash">gemini-3.5-flash</option><option value="gemini-3.8-flash">gemini-3.8-flash</option><option value="gpt-5.6-sol">gpt-5.6-sol</option><option value="gpt-6-astra">gpt-6-astra</option>'}
+function updatePlatformUI(){const runninghub=platformValue()==='runninghub';grsaiSettings.hidden=runninghub;runninghubSettings.hidden=!runninghub;apiNote.textContent=runninghub?'RunningHub：可选 5 个图片模型；提示词反推使用 glm-5.3-flash。':'Grsai：使用现有图片生成与提示词反推模型。';$('#model').innerHTML=runninghub?Object.entries(RUNNINGHUB_MODELS).map(([value,cfg])=>`<option value="${value}">${cfg.label}</option>`).join(''):'<option value="nano-banana-2">nano-banana-2</option><option value="gpt-image-2-vip">gpt-image-2-vip</option>';updateRatioOptions();reverseModel.innerHTML=runninghub?'<option value="glm-5.3-flash">glm-5.3-flash</option>':'<option value="gemini-3.8-flash">gemini-3.8-flash</option><option value="gpt-5.6-sol">gpt-5.6-sol</option><option value="gpt-6-astra">gpt-6-astra</option>'}
 function uid(){return (crypto.randomUUID?crypto.randomUUID():Date.now()+'-'+Math.random().toString(16).slice(2))}
 function readStoredRefs(key){try{const v=JSON.parse(localStorage.getItem(key)||'[]');return Array.isArray(v)?v:[]}catch{return[]}}
 function readRefs(){return readStoredRefs(REFS_KEY)}
@@ -379,8 +412,10 @@ function saveAssets(){pruneAssets();try{localStorage.setItem(ASSETS_KEY,JSON.str
   function saveSettingsFromForm(){const assetDir=$('#settingsAssetDir')?.value||'',current=syncSettingsToCore({...settingsSnapshot(),saveDir:assetDir||settingsSaveDir?.value||'',filenameTemplate:$('#settingsFilenameTemplate')?.value||workbenchSettings.filenameTemplate,skin:$('#settingsSkin')?.value||'dark',normalChannel:!!$('#settingsNormalChannel')?.checked,datePicker:$('#settingsDatePicker')?.checked!==false,clearHistory:!!$('#settingsClearHistory')?.checked,clearBoard:!!$('#settingsClearBoard')?.checked,photoshopPath:$('#settingsPhotoshopPath')?.value||'',assetDir,psdResources:!!$('#settingsPsdResources')?.checked,cacheLimit:Number($('#settingsCacheLimit')?.value)||5});storageSet(SETTINGS_KEY,JSON.stringify(current));document.documentElement.dataset.skin=current.skin;setSettingsStatus('设置已保存到本机浏览器。','ok');return current}
   async function loadSettingsFromServer(){if(settingsServerLoad)settingsServerLoad.disabled=true;setSettingsStatus('正在读取本地服务设置...','busy');try{const data=await fetchJson('/api/workbench-settings',{method:'GET',cache:'no-store'},'读取工作台设置');if(!data?.ok)throw new Error(data?.error||'读取设置失败');syncSettingsToCore({...workbenchSettings,...(data.settings||{})});setSettingsStatus('已读取本地服务设置，并同步到当前工作台。','ok')}catch(error){setSettingsStatus(error.message||String(error),'fail')}finally{if(settingsServerLoad)settingsServerLoad.disabled=false}}
   async function saveSettingsToServer(){const current=saveSettingsFromForm();if(settingsServerSave)settingsServerSave.disabled=true;setSettingsStatus('正在保存到本地服务...','busy');try{const data=await fetchJson('/api/workbench-settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({settings:current})},'保存工作台设置');if(!data?.ok)throw new Error(data?.error||'保存设置失败');if(data.settings)syncSettingsToCore({...current,...data.settings});setSettingsStatus('设置已保存到本地服务配置文件。','ok')}catch(error){setSettingsStatus(error.message||String(error),'fail')}finally{if(settingsServerSave)settingsServerSave.disabled=false}}
-  function exportWorkbenchSettings(){const current=saveSettingsFromForm(),blob=new Blob([JSON.stringify({settings:current},null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download='xiexiong-workbench-settings.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);setSettingsStatus('设置 JSON 已导出。','ok')}
-  async function importWorkbenchSettings(fileObject){if(!fileObject)return;try{const value=JSON.parse(await fileObject.text()),current=syncSettingsToCore(value?.settings||value);setSettingsStatus(`设置已导入并应用（${current.platform==='runninghub'?'RunningHub':'Grsai'}）。`,'ok')}catch(error){setSettingsStatus(`导入设置失败：${error.message||String(error)}`,'fail')}}
+  const backupMediaToDataUrl=async value=>{if(typeof value==='string'&&value.includes('/inspiration-media/')){try{const response=await fetch(value);if(response.ok)return await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(response.blob())})}catch{}}if(Array.isArray(value))return Promise.all(value.map(backupMediaToDataUrl));if(value&&typeof value==='object'){const output={};for(const [key,item] of Object.entries(value))output[key]=await backupMediaToDataUrl(item);return output}return value};
+  async function backupStorage(){const storage={};for(let index=0;index<localStorage.length;index+=1){const key=localStorage.key(index);if(!key)continue;const raw=localStorage.getItem(key);try{storage[key]=JSON.stringify(await backupMediaToDataUrl(JSON.parse(raw)))}catch{storage[key]=await backupMediaToDataUrl(raw)}}return storage}
+  async function exportWorkbenchSettings(){try{const current=saveSettingsFromForm();setSettingsStatus('正在打包完整工作台备份...','busy');const storage=await backupStorage(),backup={format:'xie-mengxiong-workbench-backup',version:2,exportedAt:Date.now(),settings:current,storage};const blob=new Blob([JSON.stringify(backup,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=`xie-mengxiong-workbench-backup-${new Date().toISOString().slice(0,10)}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);setSettingsStatus(`完整备份已导出，含 ${Object.keys(storage).length} 项工作台数据、画布、模板、灵感和参考图。`,'ok')}catch(error){setSettingsStatus(`导出备份失败：${error.message||String(error)}`,'fail')}}
+  async function importWorkbenchSettings(fileObject){if(!fileObject)return;try{const value=JSON.parse(await fileObject.text());if(value?.format==='xie-mengxiong-workbench-backup'&&value?.storage&&typeof value.storage==='object'){for(const [key,item] of Object.entries(value.storage)){let restored=item;try{restored=JSON.parse(item)}catch{}localStorage.setItem(key,typeof restored==='string'?restored:JSON.stringify(restored))}syncSettingsToCore(value.settings||{});setSettingsStatus('完整工作台备份已导入，正在刷新并同步本机数据...','ok');setTimeout(()=>location.reload(),350);return}const current=syncSettingsToCore(value?.settings||value);setSettingsStatus(`设置已导入并应用（${current.platform==='runninghub'?'RunningHub':'Grsai'}）。`,'ok')}catch(error){setSettingsStatus(`导入设置失败：${error.message||String(error)}`,'fail')}}
   function resetWorkbenchSettings(){if(!window.confirm('确定恢复默认设置吗？任务、资产和模板不会被删除。'))return;syncSettingsToCore(DEFAULT_WORKBENCH_SETTINGS,{clearRefs:false});setSettingsStatus('已恢复默认设置。','ok')}
   async function checkSettingsDirectory(){const dir=(settingsSaveDir?.value||'').trim();if(!dir){setSettingsStatus('请先填写图片保存目录。','fail');return}if(location.protocol==='file:'){setSettingsStatus('当前是直接打开 HTML 文件，无法检查本机目录。请使用桌面软件或启动器打开工作台。','fail');return}if(settingsCheckSaveDir)settingsCheckSaveDir.disabled=true;setSettingsStatus('正在检查目录权限...','busy');try{const data=await fetchJson('/api/check-save-dir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dir})},'检查保存目录');if(!data?.ok)throw new Error(data?.error||'目录不可写');setSettingsStatus(`目录可写：${data.path||dir}`,'ok')}catch(error){setSettingsStatus(error.message||String(error),'fail')}finally{if(settingsCheckSaveDir)settingsCheckSaveDir.disabled=false}}
 function addAsset(task,image=task?.image,assetTaskKey=task?.key){if(!task||!image)return;if(assets.some(a=>a.url===image||a.taskKey===assetTaskKey))return;assets.unshift({key:uid(),taskKey:assetTaskKey,url:image,title:task.model||'生成图片',model:task.model||'',flowType:task.canvasOutputNodeId||task.canvasWorkspaceKey?'canvas':'image',canvasWorkspaceKey:task.canvasWorkspaceKey||'',createdAt:Date.now(),prompt:task.prompt||'',refs:Array.isArray(task.refs)?task.refs.filter(Boolean).slice(0,10):[],inspiration:false});pruneAssets();scheduleAssetsSave();if(!assetsView.hidden)renderAssets();if(!inspirationView.hidden)renderInspiration();updateAssetCount()}
@@ -1030,37 +1065,47 @@ canvasNodes.addEventListener('input',event=>{const input=event.target.closest('[
 /* Give the canvas controls their own compact strip below the title. */
 #canvasView .view-head{display:block;margin-bottom:10px}
 #canvasView .view-head>.canvas-toolbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--surface)}
-#canvasView .canvas-links{pointer-events:none;overflow:visible}
+#canvasView .canvas-links{pointer-events:auto;overflow:visible;z-index:1}
+#canvasView #canvasNodes{position:relative;z-index:2}
 #canvasView .canvas-link{pointer-events:stroke;cursor:pointer}
 #canvasView .canvas-link.selected{stroke:#ffd66b;stroke-width:5;filter:drop-shadow(0 0 3px rgba(255,214,107,.65))}
 #canvasView .canvas-link-hit{pointer-events:stroke;stroke:transparent;stroke-width:14;fill:none;cursor:pointer}
+#canvas-link-delete{position:fixed;z-index:50;display:none;width:26px;height:26px;padding:0;border:1px solid #ff8d8d;border-radius:50%;background:#5b2228;color:#fff;font-size:18px;line-height:20px;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.3)}
+#canvas-link-delete:hover{background:#8b3039}
 </style>
 <script>
 (function(){
   if(typeof canvasLinks==='undefined'||typeof canvasState==='undefined')return;
   let selectedLinkIndex=-1;
+  const deleteButton=document.createElement('button');
+  deleteButton.id='canvas-link-delete';deleteButton.type='button';deleteButton.title='删除连接线';deleteButton.setAttribute('aria-label','删除连接线');deleteButton.textContent='×';document.body.appendChild(deleteButton);
+  const removeSelectedLink=()=>{if(!Number.isInteger(selectedLinkIndex)||!canvasState.links[selectedLinkIndex])return;canvasState.links.splice(selectedLinkIndex,1);selectedLinkIndex=-1;deleteButton.style.display='none';saveCanvas();renderCanvasLinks()};
+  const positionDeleteButton=()=>{const path=canvasLinks.querySelector(`.canvas-link[data-link-index="${selectedLinkIndex}"]`);if(!path){deleteButton.style.display='none';return}const length=path.getTotalLength();const point=path.getPointAtLength(length/2);const matrix=path.getScreenCTM();if(!matrix){deleteButton.style.display='none';return}const screen=new DOMPoint(point.x,point.y).matrixTransform(matrix);deleteButton.style.left=`${Math.round(screen.x-13)}px`;deleteButton.style.top=`${Math.round(screen.y-13)}px`;deleteButton.style.display='block'};
   const drawLinks=renderCanvasLinks;
   renderCanvasLinks=function(preview){
     drawLinks(preview);
     const paths=[...canvasLinks.querySelectorAll('.canvas-link')];
-    paths.forEach((path,index)=>{path.dataset.linkIndex=index;path.classList.toggle('selected',index===selectedLinkIndex)});
+    paths.forEach((path,index)=>{path.dataset.linkIndex=index;path.classList.toggle('selected',index===selectedLinkIndex);if(!path.classList.contains('preview')){const hit=path.cloneNode(false);hit.className.baseVal='canvas-link-hit';hit.dataset.linkIndex=index;path.after(hit)}});
+    if(selectedLinkIndex>=canvasState.links.length){selectedLinkIndex=-1;deleteButton.style.display='none'}else if(selectedLinkIndex>=0)requestAnimationFrame(positionDeleteButton);
   };
   canvasLinks.addEventListener('click',event=>{
-    const path=event.target.closest('.canvas-link');if(!path)return;
+    const path=event.target.closest('.canvas-link,.canvas-link-hit');if(!path)return;
     event.stopPropagation();selectedLinkIndex=Number(path.dataset.linkIndex);renderCanvasLinks();
   });
   canvasLinks.addEventListener('contextmenu',event=>{
-    const path=event.target.closest('.canvas-link');if(!path)return;
+    const path=event.target.closest('.canvas-link,.canvas-link-hit');if(!path)return;
     event.preventDefault();event.stopPropagation();const index=Number(path.dataset.linkIndex);
     if(!Number.isInteger(index)||!canvasState.links[index])return;
-    canvasState.links.splice(index,1);selectedLinkIndex=-1;saveCanvas();renderCanvasLinks();
+    selectedLinkIndex=index;removeSelectedLink();
   });
+  deleteButton.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();removeSelectedLink()});
+  window.addEventListener('resize',()=>selectedLinkIndex>=0&&requestAnimationFrame(positionDeleteButton));
   document.addEventListener('keydown',event=>{
     if(selectedLinkIndex<0||!['Delete','Backspace'].includes(event.key))return;
     const active=document.activeElement;
     if(active&&['INPUT','TEXTAREA','SELECT'].includes(active.tagName))return;
     if(!canvasState.links[selectedLinkIndex])return;
-    event.preventDefault();canvasState.links.splice(selectedLinkIndex,1);selectedLinkIndex=-1;saveCanvas();renderCanvasLinks();
+    event.preventDefault();removeSelectedLink();
   });
   renderCanvasLinks();
 })();

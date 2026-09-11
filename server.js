@@ -13,7 +13,46 @@ const RUNNINGHUB_API_BASE = '/openapi/v2';
 const UPSTREAM_LOG_FILE = path.join(__dirname, 'upstream-error.log');
 const SETTINGS_DIR = path.join(process.env.APPDATA || process.env.LOCALAPPDATA || path.join(require('os').homedir(), 'AppData', 'Roaming'), 'XieMengxiongWorkbench');
 const WORKBENCH_SETTINGS_FILE = path.join(SETTINGS_DIR, 'workbench-settings.json');
+const WORKBENCH_STATE_FILE = path.join(SETTINGS_DIR, 'workbench-state.json');
 const INSPIRATION_DIR = path.join(SETTINGS_DIR, 'inspirations');
+
+function sanitizeWorkbenchState(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const storage = source.storage && typeof source.storage === 'object' ? source.storage : {};
+  const output = {};
+  let total = 0;
+  for (const [key, raw] of Object.entries(storage)) {
+    if (!/^(aiWorkbench|refSlots$|reverseRefSlots$|grsaiKey$|grsaiUrl$|runninghubKey$|canvas)/.test(key)) continue;
+    const text = String(raw ?? '');
+    total += Buffer.byteLength(text);
+    if (total > 50 * 1024 * 1024) throw new Error('工作台状态超过 50MB，请减少缓存图片后重试');
+    output[String(key).slice(0, 160)] = text;
+  }
+  return { version: 1, updatedAt: Number(source.updatedAt) || Date.now(), storage: output };
+}
+
+async function handleWorkbenchState(req, res) {
+  try {
+    if (req.method === 'GET') {
+      try {
+        const state = sanitizeWorkbenchState(JSON.parse(await fs.promises.readFile(WORKBENCH_STATE_FILE, 'utf8')));
+        return sendJson(res, 200, { ok: true, state });
+      } catch (error) {
+        if (error?.code === 'ENOENT') return sendJson(res, 200, { ok: true, state: null });
+        throw error;
+      }
+    }
+    if (req.method !== 'PUT') return sendJson(res, 405, { ok: false, error: '仅支持 GET 或 PUT' });
+    const state = sanitizeWorkbenchState(JSON.parse(await readBody(req))?.state);
+    await fs.promises.mkdir(SETTINGS_DIR, { recursive: true });
+    const temporary = `${WORKBENCH_STATE_FILE}.${process.pid}.tmp`;
+    await fs.promises.writeFile(temporary, `${JSON.stringify(state)}\n`, 'utf8');
+    await fs.promises.rename(temporary, WORKBENCH_STATE_FILE);
+    sendJson(res, 200, { ok: true, updatedAt: state.updatedAt });
+  } catch (error) {
+    sendJson(res, 500, { ok: false, error: `工作台状态读写失败: ${error.message || error}` });
+  }
+}
 
 const SETTINGS_KEYS = new Set([
   'version', 'platform', 'apiUrl', 'apiKey', 'runninghubKey', 'saveDir',
@@ -390,6 +429,17 @@ const server = http.createServer((req, res) => {
 
   if ((req.method === 'GET' || req.method === 'PUT') && req.url.split('?')[0] === '/api/workbench-settings') {
     handleWorkbenchSettings(req, res);
+    return;
+  }
+
+  if ((req.method === 'GET' || req.method === 'PUT') && req.url.split('?')[0] === '/api/workbench-state') {
+    handleWorkbenchState(req, res);
+    return;
+  }
+
+  if (req.method === 'GET' && req.url.split('?')[0] === '/api/storage-bridge') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end('<!doctype html><meta charset="utf-8"><title>Storage bridge</title>');
     return;
   }
 

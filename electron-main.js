@@ -1,10 +1,19 @@
 const { app, BrowserWindow, shell, dialog } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const http = require('http');
+const fs = require('fs');
 const path = require('path');
 
 const ROOT = __dirname;
 let port = 4173;
+
+const stableUserData = path.join(app.getPath('appData'), 'xie-mengxiong-workbench');
+if (!fs.existsSync(stableUserData)) {
+  const candidates = ['AIwork', '谢梦雄创作台'].map(name => path.join(app.getPath('appData'), name));
+  const legacy = candidates.filter(candidate => fs.existsSync(path.join(candidate, 'Local Storage'))).sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
+  if (legacy) fs.cpSync(legacy, stableUserData, { recursive: true });
+}
+app.setPath('userData', stableUserData);
 
 function health(candidate) {
   return new Promise(resolve => {
@@ -37,10 +46,35 @@ async function waitForServer() {
   throw new Error('本地服务启动超时。');
 }
 
+async function storageForHost(host) {
+  const bridge = new BrowserWindow({ show: false, webPreferences: { contextIsolation: true, nodeIntegration: false } });
+  try {
+    await bridge.loadURL(`http://${host}:${port}/api/storage-bridge`);
+    return await bridge.webContents.executeJavaScript('Object.fromEntries(Array.from({length:localStorage.length},(_,i)=>{const key=localStorage.key(i);return [key,localStorage.getItem(key)]}))');
+  } finally {
+    bridge.destroy();
+  }
+}
+
+async function migrateOriginStorage() {
+  const localhost = await storageForHost('localhost').catch(() => ({}));
+  const canonical = await storageForHost('127.0.0.1').catch(() => ({}));
+  const merged = { ...localhost, ...canonical };
+  if (!Object.keys(merged).length) return;
+  const bridge = new BrowserWindow({ show: false, webPreferences: { contextIsolation: true, nodeIntegration: false } });
+  try {
+    await bridge.loadURL(`http://127.0.0.1:${port}/api/storage-bridge`);
+    await bridge.webContents.executeJavaScript(`(()=>{const values=${JSON.stringify(merged)};for(const [key,value] of Object.entries(values)){const current=localStorage.getItem(key);if(current===null||current===''||current==='[]'||current==='{}')localStorage.setItem(key,value)}})()`);
+  } finally {
+    bridge.destroy();
+  }
+}
+
 async function createWindow() {
   port = await choosePort();
   startServer();
   await waitForServer();
+  await migrateOriginStorage();
   const win = new BrowserWindow({
     width: 1440,
     height: 920,
