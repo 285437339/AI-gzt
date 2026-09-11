@@ -9,6 +9,14 @@ let port = 4173;
 let mainWindow = null;
 let updateState = { supported: false, status: '网页版无需检查安装更新。', version: app.getVersion(), availableVersion: '' };
 
+function reportStartupError(error) {
+  const message = error instanceof Error ? (error.stack || error.message) : String(error);
+  try { fs.writeFileSync(path.join(app.getPath('userData'), 'startup-error.log'), `${new Date().toISOString()}\n${message}\n`, 'utf8'); } catch (_) {}
+  console.error(message);
+  try { if (app.isReady()) dialog.showErrorBox('谢梦雄创作台启动失败', message); } catch (_) {}
+  app.quit();
+}
+
 const stableUserData = path.join(app.getPath('appData'), 'xie-mengxiong-workbench');
 if (!fs.existsSync(stableUserData)) {
   const candidates = ['AIwork', '谢梦雄创作台'].map(name => path.join(app.getPath('appData'), name));
@@ -76,7 +84,7 @@ async function createWindow() {
   port = await choosePort();
   startServer();
   await waitForServer();
-  await migrateOriginStorage();
+  try { await migrateOriginStorage(); } catch (error) { console.warn('旧数据迁移跳过:', error?.message || error); }
   const win = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -87,7 +95,11 @@ async function createWindow() {
     webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(ROOT, 'preload.js') }
   });
   mainWindow = win;
-  win.loadURL(`http://127.0.0.1:${port}/?desktop=1`);
+  win.webContents.on('did-fail-load', (_event, code, description, url) => {
+    const message = `页面加载失败 (${code}): ${description}\n${url}`;
+    try { fs.appendFileSync(path.join(app.getPath('userData'), 'startup-error.log'), `${new Date().toISOString()}\n${message}\n`, 'utf8'); } catch (_) {}
+  });
+  await win.loadURL(`http://127.0.0.1:${port}/?desktop=1`);
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (!url.startsWith(`http://127.0.0.1:${port}`)) shell.openExternal(url);
     return { action: 'deny' };
@@ -120,6 +132,8 @@ ipcMain.handle('workbench:check-update', async () => {
   return updateState;
 });
 
-app.whenReady().then(() => createWindow().catch(error => { console.error(error); app.quit(); }));
+process.on('uncaughtException', reportStartupError);
+process.on('unhandledRejection', reportStartupError);
+app.whenReady().then(createWindow).catch(reportStartupError);
 app.on('window-all-closed', () => app.quit());
 app.on('before-quit', () => { app.isQuitting = true; });
