@@ -1,0 +1,7 @@
+node_modules/
+dist/
+generated/
+*.log
+.tmp-appdata/
+rhcli-read/
+release-repo/

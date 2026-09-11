@@ -1,0 +1,76 @@
+const { app, BrowserWindow, shell, dialog } = require('electron');
+const { autoUpdater } = require('electron-updater');
+const http = require('http');
+const path = require('path');
+
+const ROOT = __dirname;
+let port = 4173;
+
+function health(candidate) {
+  return new Promise(resolve => {
+    const request = http.get({ hostname: '127.0.0.1', port: candidate, path: '/api/health', timeout: 700 }, response => {
+      response.resume();
+      response.on('end', () => resolve(response.statusCode === 200));
+    });
+    request.on('error', () => resolve(false));
+    request.on('timeout', () => { request.destroy(); resolve(false); });
+  });
+}
+
+async function choosePort() {
+  for (let candidate = 4173; candidate <= 4190; candidate += 1) {
+    if (!(await health(candidate))) return candidate;
+  }
+  throw new Error('没有可用的本地端口。');
+}
+
+function startServer() {
+  process.env.AI_WORKBENCH_PORT = String(port);
+  require(path.join(ROOT, 'server.js'));
+}
+
+async function waitForServer() {
+  for (let i = 0; i < 40; i += 1) {
+    if (await health(port)) return;
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  throw new Error('本地服务启动超时。');
+}
+
+async function createWindow() {
+  port = await choosePort();
+  startServer();
+  await waitForServer();
+  const win = new BrowserWindow({
+    width: 1440,
+    height: 920,
+    minWidth: 980,
+    minHeight: 680,
+    backgroundColor: '#101114',
+    title: '谢梦雄创作台',
+    webPreferences: { contextIsolation: true, nodeIntegration: false }
+  });
+  win.loadURL(`http://127.0.0.1:${port}/?desktop=1`);
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (!url.startsWith(`http://127.0.0.1:${port}`)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  if (app.isPackaged) {
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = false;
+    autoUpdater.on('update-available', info => {
+      dialog.showMessageBox(win, { type: 'info', title: '发现新版本', message: `发现新版本 ${info.version}，正在后台下载。` });
+    });
+    autoUpdater.on('update-downloaded', () => {
+      dialog.showMessageBox(win, { type: 'info', title: '更新已下载', message: '新版本已下载完成，重启工作台即可完成更新。', buttons: ['立即重启', '稍后'] }).then(({ response }) => {
+        if (response === 0) autoUpdater.quitAndInstall();
+      });
+    });
+    autoUpdater.on('error', error => console.warn('自动更新检查失败:', error.message));
+    setTimeout(() => autoUpdater.checkForUpdates().catch(error => console.warn('自动更新检查失败:', error.message)), 2500);
+  }
+}
+
+app.whenReady().then(() => createWindow().catch(error => { console.error(error); app.quit(); }));
+app.on('window-all-closed', () => app.quit());
+app.on('before-quit', () => { app.isQuitting = true; });
