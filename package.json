@@ -1,6 +1,6 @@
 {
   "name": "xie-mengxiong-workbench",
-  "version": "1.0.2",
+  "version": "1.0.1",
   "description": "谢梦雄创作台",
   "main": "electron-main.js",
   "private": true,
@@ -9,7 +9,7 @@
     "dist": "electron-builder --win nsis"
   },
   "devDependencies": {
-    "electron": "37.2.6",
+    "electron": "^37.2.6",
     "electron-builder": "^26.0.12",
     "vite": "^6.4.3"
   },

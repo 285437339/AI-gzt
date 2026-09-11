@@ -15,6 +15,7 @@ const SETTINGS_DIR = path.join(process.env.APPDATA || process.env.LOCALAPPDATA |
 const WORKBENCH_SETTINGS_FILE = path.join(SETTINGS_DIR, 'workbench-settings.json');
 const WORKBENCH_STATE_FILE = path.join(SETTINGS_DIR, 'workbench-state.json');
 const INSPIRATION_DIR = path.join(SETTINGS_DIR, 'inspirations');
+const DEFAULT_MEDIA_CACHE_DIR = path.join(SETTINGS_DIR, 'media-cache');
 
 function sanitizeWorkbenchState(value) {
   const source = value && typeof value === 'object' ? value : {};
@@ -58,7 +59,7 @@ const SETTINGS_KEYS = new Set([
   'version', 'platform', 'apiUrl', 'apiKey', 'runninghubKey', 'saveDir',
   'filenameTemplate', 'startupView', 'keepRefs', 'skin', 'normalChannel',
   'datePicker', 'clearHistory', 'clearBoard', 'photoshopPath', 'assetDir',
-  'psdResources', 'cacheLimit', 'updatedAt'
+  'psdResources', 'cacheLimit', 'cacheDir', 'updatedAt'
 ]);
 const BOOLEAN_SETTINGS_KEYS = new Set(['keepRefs', 'normalChannel', 'datePicker', 'clearHistory', 'clearBoard', 'psdResources']);
 const ALLOWED_SKINS = new Set(['dark', 'soft', 'warm', 'light']);
@@ -109,6 +110,57 @@ async function handleWorkbenchSettings(req, res) {
     sendJson(res, 200, { ok: true, settings, path: WORKBENCH_SETTINGS_FILE });
   } catch (error) {
     sendJson(res, 500, { ok: false, error: `工作台设置读写失败: ${error.message || error}` });
+  }
+}
+
+function cacheDirectoryFromSettings(settings) {
+  const requested = cleanDirectory(settings?.cacheDir);
+  return requested ? path.resolve(requested) : DEFAULT_MEDIA_CACHE_DIR;
+}
+
+function safeCacheFile(root, relative) {
+  const target = path.resolve(root, relative);
+  if (target !== root && !target.startsWith(`${root}${path.sep}`)) throw new Error('缓存路径无效');
+  return target;
+}
+
+async function storeCacheMedia(req, res) {
+  try {
+    const data = JSON.parse(await readBody(req));
+    const sources = (Array.isArray(data.sources) ? data.sources : [data.source]).map(value => String(value || '').trim()).filter(Boolean).slice(0, 12);
+    if (!sources.length) return sendJson(res, 400, { error: '缺少需要缓存的图片' });
+    const settings = await readWorkbenchSettingsFile();
+    const root = cacheDirectoryFromSettings(settings);
+    const kind = data.kind === 'assets' ? 'assets' : 'references';
+    await fs.promises.mkdir(path.join(root, kind), { recursive: true });
+    const urls = [];
+    for (let index = 0; index < sources.length; index += 1) {
+      const source = sources[index];
+      const dataMatch = source.match(/^data:image\/(png|jpeg|jpg|webp);base64,/i);
+      const extension = (dataMatch?.[1] || 'png').toLowerCase().replace('jpeg', 'jpg');
+      const filename = `${kind}-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}.${extension}`;
+      await downloadToFile(source, safeCacheFile(root, path.join(kind, filename)));
+      urls.push(`/cache-media/${encodeURIComponent(kind)}/${encodeURIComponent(filename)}`);
+    }
+    sendJson(res, 200, { ok: true, urls, directory: root });
+  } catch (error) {
+    sendJson(res, 500, { error: `缓存图片失败: ${error.message || error}` });
+  }
+}
+
+async function serveCacheMedia(req, res) {
+  try {
+    const parts = req.url.split('?')[0].split('/').filter(Boolean).slice(1);
+    if (parts.length !== 2 || !['assets', 'references'].includes(parts[0])) throw new Error('缓存资源不存在');
+    const settings = await readWorkbenchSettingsFile();
+    const file = safeCacheFile(cacheDirectoryFromSettings(settings), path.join(parts[0], decodeURIComponent(parts[1])));
+    const body = await fs.promises.readFile(file);
+    const extension = path.extname(file).toLowerCase();
+    const type = extension === '.jpg' || extension === '.jpeg' ? 'image/jpeg' : extension === '.webp' ? 'image/webp' : 'image/png';
+    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'public, max-age=31536000, immutable' });
+    res.end(body);
+  } catch {
+    sendJson(res, 404, { error: '缓存图片不存在' });
   }
 }
 
@@ -419,6 +471,16 @@ const server = http.createServer((req, res) => {
 
   if (req.method === 'POST' && req.url === '/api/inspiration-store') {
     storeInspirationMedia(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/cache-media') {
+    storeCacheMedia(req, res);
+    return;
+  }
+
+  if (req.method === 'GET' && req.url.startsWith('/cache-media/')) {
+    serveCacheMedia(req, res);
     return;
   }
 
