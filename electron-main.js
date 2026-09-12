@@ -1,6 +1,7 @@
 const { app, BrowserWindow, shell, dialog, ipcMain } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const http = require('http');
+const net = require('net');
 const fs = require('fs');
 const path = require('path');
 
@@ -36,11 +37,20 @@ function health(candidate) {
   });
 }
 
+function canBind(candidate) {
+  return new Promise(resolve => {
+    const probe = net.createServer();
+    probe.once('error', () => resolve(false));
+    probe.listen(candidate, '127.0.0.1', () => probe.close(() => resolve(true)));
+  });
+}
+
 async function choosePort() {
   for (let candidate = 4173; candidate <= 4190; candidate += 1) {
-    if (!(await health(candidate))) return candidate;
+    if (await health(candidate)) continue;
+    if (await canBind(candidate)) return candidate;
   }
-  throw new Error('没有可用的本地端口。');
+  throw new Error('没有可用的本地端口（4173-4190 均被占用）。');
 }
 
 function startServer() {
@@ -132,8 +142,19 @@ ipcMain.handle('workbench:check-update', async () => {
   return updateState;
 });
 
-process.on('uncaughtException', reportStartupError);
-process.on('unhandledRejection', reportStartupError);
-app.whenReady().then(createWindow).catch(reportStartupError);
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+  process.on('uncaughtException', reportStartupError);
+  process.on('unhandledRejection', reportStartupError);
+  app.whenReady().then(createWindow).catch(reportStartupError);
+}
 app.on('window-all-closed', () => app.quit());
 app.on('before-quit', () => { app.isQuitting = true; });
