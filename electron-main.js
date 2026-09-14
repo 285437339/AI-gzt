@@ -76,8 +76,8 @@ async function createWindow() {
         if (response === 0) autoUpdater.quitAndInstall();
       });
     });
-    autoUpdater.on('error', error => console.warn('自动更新检查失败:', error.message));
-    setTimeout(() => autoUpdater.checkForUpdates().catch(error => console.warn('自动更新检查失败:', error.message)), 2500);
+    autoUpdater.on('error', error => { console.warn('自动更新检查失败:', error.message); dialog.showErrorBox('自动更新失败', `无法检查新版本：${error.message}`); });
+    setTimeout(() => autoUpdater.checkForUpdates().catch(error => { console.warn('自动更新检查失败:', error.message); dialog.showErrorBox('自动更新失败', `无法检查新版本：${error.message}`); }), 2500);
   }
 }
 
