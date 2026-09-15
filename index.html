@@ -426,7 +426,7 @@ function saveAssets(){pruneAssets();try{localStorage.setItem(ASSETS_KEY,JSON.str
   function resetWorkbenchSettings(){if(!window.confirm('确定恢复默认设置吗？任务、资产和模板不会被删除。'))return;syncSettingsToCore(DEFAULT_WORKBENCH_SETTINGS,{clearRefs:false});setSettingsStatus('已恢复默认设置。','ok')}
   async function checkSettingsDirectory(){const dir=(settingsSaveDir?.value||'').trim();if(!dir){setSettingsStatus('请先填写图片保存目录。','fail');return}if(location.protocol==='file:'){setSettingsStatus('当前是直接打开 HTML 文件，无法检查本机目录。请使用桌面软件或启动器打开工作台。','fail');return}if(settingsCheckSaveDir)settingsCheckSaveDir.disabled=true;setSettingsStatus('正在检查目录权限...','busy');try{const data=await fetchJson('/api/check-save-dir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dir})},'检查保存目录');if(!data?.ok)throw new Error(data?.error||'目录不可写');setSettingsStatus(`目录可写：${data.path||dir}`,'ok')}catch(error){setSettingsStatus(error.message||String(error),'fail')}finally{if(settingsCheckSaveDir)settingsCheckSaveDir.disabled=false}}
  function addAsset(task,image=task?.image,assetTaskKey=task?.key){if(!task||!image)return;if(assets.some(a=>a.url===image||a.taskKey===assetTaskKey))return;const asset={key:uid(),taskKey:assetTaskKey,url:image,title:task.model||'生成图片',model:task.model||'',flowType:task.canvasOutputNodeId||task.canvasWorkspaceKey?'canvas':'image',canvasWorkspaceKey:task.canvasWorkspaceKey||'',createdAt:Date.now(),prompt:task.prompt||'',refs:Array.isArray(task.refs)?task.refs.filter(Boolean).slice(0,10):[],inspiration:false};assets.unshift(asset);pruneAssets();scheduleAssetsSave();if(!assetsView.hidden)renderAssets();if(!inspirationView.hidden)renderInspiration();updateAssetCount();cacheAssetThumbnail(asset)}
- function cacheAssetThumbnail(asset){if(!asset?.url||asset.thumbnailUrl)return;fetchJson('/api/cache-media',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:asset.url,kind:'assets'})},'缓存资产缩略图').then(data=>{const current=findAsset(asset.key);if(!current||!data?.urls?.[0])return;current.thumbnailUrl=data.urls[0];current.url=data.urls[0];saveAssets();if(!assetsView.hidden)renderAssets()}).catch(()=>{})}
+ function cacheAssetThumbnail(asset){if(!asset?.url||asset.thumbnailUrl)return;fetchJson('/api/cache-media',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:asset.url,kind:'assets'})},'缓存资产缩略图').then(data=>{const current=findAsset(asset.key);if(!current||!data?.urls?.[0])return;current.thumbnailUrl=data.urls[0];saveAssets();if(!assetsView.hidden)renderAssets()}).catch(()=>{})}
 function addAssetToInspiration(asset){if(!asset?.url)return;const exists=importedInspirations.some(item=>item.url===asset.url&&String(item.prompt||'').trim()===String(asset.prompt||'').trim());if(exists){setAssetFeedback('这张图片已经收录到灵感广场。','ok');return}const category=inspirationCategory==='全部'?(asset.flowType==='canvas'?'无限画布':'图片生成'):inspirationCategory;importedInspirations.unshift({key:`asset-${asset.key}`,assetKey:asset.key,url:asset.url,title:asset.title||'生成图片',prompt:asset.prompt||'',model:asset.model||'',flowType:asset.flowType==='canvas'?'canvas':'image',canvasWorkspaceKey:asset.canvasWorkspaceKey||'',refs:Array.isArray(asset.refs)?asset.refs.filter(Boolean).slice(0,10):[],category,createdAt:asset.createdAt||Date.now(),source:'asset'});asset.inspiration=true;saveImportedInspirations();saveAssets();renderAssets();if(!inspirationView.hidden)renderInspiration();setAssetFeedback(`已收录到“${category}”。`,'ok')}
 function removeInspiration(item){if(!item)return;const index=importedInspirations.findIndex(existing=>existing.key===item.key);if(index>=0)importedInspirations.splice(index,1);if(item.source==='asset'){const asset=findAsset(item.assetKey);if(asset)asset.inspiration=false;saveAssets()}saveImportedInspirations();renderInspiration();setAssetFeedback('已从灵感广场移除。','ok')}
 function renderCustomTemplates(){if(!customTemplateSelect)return;customTemplateSelect.innerHTML='<option value="">模板选择（选择内置或自定义）</option><option value="builtin:person">人物模板</option><option value="builtin:still">静物模板</option><option value="builtin:blank">空白模板</option>'+customTemplates.map(template=>`<option value="${esc(template.key)}">${esc(template.name)}</option>`).join('');customTemplateSelect.value=selectedCustomTemplateKey||'';deleteTemplateButton.disabled=!selectedCustomTemplateKey||selectedCustomTemplateKey.startsWith('builtin:');renderTemplateOrder()}
@@ -468,7 +468,8 @@ function scheduleAssetsSave(){if(assetSaveTimer)clearTimeout(assetSaveTimer);ass
 function updateAssetCount(){assetCount.textContent=String(assets.length);assetSummary.textContent=assets.length?`${assets.length} 张图片`:'暂无图片'}
 function setAssetFeedback(message,kind=''){assetFeedback.textContent=message||'';assetFeedback.className=`asset-feedback${kind?` ${kind}`:''}`}
 function assetSaveStateHTML(a){if(a.saveStatus==='saving')return '<div class="asset-save-state busy">正在保存到设置目录...</div>';if(a.saveStatus==='saved')return `<div class="asset-save-state ok">${a.saveWarning?esc(a.saveWarning):'已保存'}${a.savedPath?`：${esc(a.savedPath)}`:''}</div>`;if(a.saveStatus==='failed')return `<div class="asset-save-state fail">保存失败：${esc(a.saveError||'未知错误')}</div>`;return ''}
-function renderAssets(){if(!assets.length){assetGrid.innerHTML='<div class="asset-empty">生成成功的图片会自动出现在这里。</div>';return}assetGrid.innerHTML=assets.map(a=>{const saving=a.saveStatus==='saving',saved=a.saveStatus==='saved',label=saving?'保存中...':saved?'已保存':'保存',disabled=saving||saved?' disabled':'',inspirationAdded=importedInspirations.some(item=>item.source==='asset'&&item.assetKey===a.key);return `<article class="asset-card" data-asset-key="${esc(a.key)}"><button class="asset-thumb" data-image="${esc(a.url)}" data-caption="${esc(a.prompt||a.model||'生成图片')}" type="button"><img src="${esc(a.url)}" alt="${esc(a.title||'生成图片')}"></button><div class="asset-info"><div class="asset-title" title="${esc(a.prompt||a.title||'生成图片')}">${esc(a.title||'生成图片')}</div><div class="asset-meta">${esc(a.model||'')} · ${new Date(a.createdAt||Date.now()).toLocaleString('zh-CN')}</div><div class="asset-actions"><button data-asset-action="view" data-image="${esc(a.url)}" data-caption="${esc(a.prompt||a.model||'生成图片')}" type="button">查看大图</button><button data-asset-action="save" data-image="${esc(a.url)}" data-caption="${esc(a.title||'生成图片')}" type="button"${disabled}>${label}</button><button data-asset-action="inspiration" type="button"${inspirationAdded?' disabled':''}>${inspirationAdded?'已收录':'加入灵感'}</button></div>${assetSaveStateHTML(a)}</div></article>`}).join('')}
+let assetRenderSignature='';
+function renderAssets(){const signature=assets.map(a=>`${a.key}:${a.thumbnailUrl||a.url}:${a.saveStatus||''}:${a.inspiration?'1':'0'}`).join('|');if(signature===assetRenderSignature&&assetGrid.childElementCount)return;assetRenderSignature=signature;if(!assets.length){assetGrid.innerHTML='<div class="asset-empty">生成成功的图片会自动出现在这里。</div>';return}assetGrid.innerHTML=assets.map(a=>{const saving=a.saveStatus==='saving',saved=a.saveStatus==='saved',label=saving?'保存中...':saved?'已保存':'保存',disabled=saving||saved?' disabled':'',inspirationAdded=importedInspirations.some(item=>item.source==='asset'&&item.assetKey===a.key),thumb=a.thumbnailUrl||a.url;return `<article class="asset-card" data-asset-key="${esc(a.key)}"><button class="asset-thumb" data-image="${esc(thumb)}" data-caption="${esc(a.prompt||a.model||'生成图片')}" type="button"><img src="${esc(thumb)}" loading="lazy" decoding="async" alt="${esc(a.title||'生成图片')}"></button><div class="asset-info"><div class="asset-title" title="${esc(a.prompt||a.title||'生成图片')}">${esc(a.title||'生成图片')}</div><div class="asset-meta">${esc(a.model||'')} · ${new Date(a.createdAt||Date.now()).toLocaleString('zh-CN')}</div><div class="asset-actions"><button data-asset-action="view" data-image="${esc(thumb)}" data-caption="${esc(a.prompt||a.model||'生成图片')}" type="button">查看大图</button><button data-asset-action="save" data-image="${esc(a.url)}" data-caption="${esc(a.title||'生成图片')}" type="button"${disabled}>${label}</button><button data-asset-action="inspiration" type="button"${inspirationAdded?' disabled':''}>${inspirationAdded?'已收录':'加入灵感'}</button></div>${assetSaveStateHTML(a)}</div></article>`}).join('')}
  function renderInspiration(){if(!inspirationGrid)return;const filter=inspirationCategory==='全部'?null:inspirationCategory,isFlow=filter==='图片生成'||filter==='无限画布',flow=filter==='无限画布'?'canvas':'image',matches=item=>!filter||(isFlow?(item.flowType||'image')===flow:String(item.category||'未分类')===filter),imported=importedInspirations.filter(matches),cards=[...imported,...assets.filter(item=>matches(item)&&item.inspiration===true)];if(inspirationCategoryFilter){const custom=inspirationCategories.filter(item=>!['未分类','图片生成','无限画布'].includes(item));const sub=(flowKey)=>custom.filter(item=>item.startsWith(`${flowKey}/`)).map(item=>item.slice(flowKey.length+1));inspirationCategoryFilter.innerHTML=`<option value="全部">全部</option><optgroup label="图片生成"><option value="图片生成">全部图片生成</option>${sub('图片生成').map(item=>`<option value="图片生成/${esc(item)}">${esc(item)}</option>`).join('')}</optgroup><optgroup label="无限画布"><option value="无限画布">全部无限画布</option>${sub('无限画布').map(item=>`<option value="无限画布/${esc(item)}">${esc(item)}</option>`).join('')}</optgroup><optgroup label="未分类"><option value="未分类">未分类</option></optgroup>`}if(inspirationCategoryFilter)inspirationCategoryFilter.value=inspirationCategory;if(!cards.length){inspirationGrid.innerHTML='<div class="inspiration-empty">这个分类还没有灵感。可在资产中心点击“加入灵感”进行收录。</div>';if(inspirationSummary)inspirationSummary.textContent='暂无图片';return}if(inspirationSummary)inspirationSummary.textContent=`${cards.length} 张灵感图片`;inspirationGrid.innerHTML=cards.map(a=>{const prompt=String(a.prompt||'').trim()||'这张图片暂未记录提示词。',flowName=(a.flowType||'image')==='canvas'?'无限画布':'图片生成',category=String(a.category||flowName);return `<article class="inspiration-card" data-asset-key="${esc(a.key)}"><button class="inspiration-thumb" data-inspiration-action="view" data-image="${esc(a.url)}" data-caption="${esc(a.prompt||a.model||'生成图片')}" type="button"><img src="${esc(a.url)}" loading="lazy" alt="${esc(a.title||'灵感图片')}"></button><div class="inspiration-info"><div class="inspiration-title" title="${esc(a.prompt||a.title||'灵感图片')}">${esc(a.title||'灵感图片')}</div><div class="inspiration-meta">${esc(category)} · ${esc(a.model||'')} · ${new Date(a.createdAt||Date.now()).toLocaleString('zh-CN')}</div><p class="inspiration-prompt">${esc(prompt)}</p><div class="inspiration-actions"><select data-inspiration-action="category" aria-label="移动到分类">${inspirationCategories.map(item=>`<option value="${esc(item)}"${item===category?' selected':''}>${esc(item)}</option>`).join('')}</select><button data-inspiration-action="use" type="button">使用灵感</button><button data-inspiration-action="view" data-image="${esc(a.url)}" data-caption="${esc(a.prompt||a.model||'生成图片')}" type="button">查看大图</button></div></div></article>`}).join('')}
  function renderAssistant(){if(!assistantGrid)return;const query=assistantQuery.trim().toLowerCase(),categories=['全部',...new Set(assistantTemplates.map(item=>String(item.category||'常用')).filter(Boolean))],visible=assistantTemplates.filter(item=>(assistantCategory==='全部'||String(item.category||'常用')===assistantCategory)&&(!query||`${item.title} ${item.content} ${item.category}`.toLowerCase().includes(query)));assistantCategories.innerHTML=categories.map(category=>{const count=category==='全部'?assistantTemplates.length:assistantTemplates.filter(item=>String(item.category||'常用')===category).length;return `<button class="assistant-category${assistantCategory===category?' active':''}" data-assistant-category="${esc(category)}" type="button"><span>${esc(category)}</span><span class="assistant-category-count">${count}</span></button>`}).join('');assistantGrid.innerHTML=visible.length?visible.map(item=>`<article class="assistant-card" data-assistant-id="${esc(item.id)}"><button class="assistant-card-title" data-assistant-action="use" type="button" title="填入图片生成">${esc(item.title)}</button><button class="assistant-card-edit" data-assistant-action="edit" type="button" title="编辑提示词" aria-label="编辑 ${esc(item.title)}">✎</button><button class="assistant-card-delete" data-assistant-action="delete" type="button" title="删除提示词" aria-label="删除 ${esc(item.title)}">×</button></article>`).join(''):'<div class="assistant-empty">没有匹配的提示词模板。</div>';if(assistantSummary)assistantSummary.textContent=`显示 ${visible.length}/${assistantTemplates.length} 个模板`}
  let assistantEditingId='';
@@ -1549,6 +1550,75 @@ canvasNodes.addEventListener('input',event=>{const input=event.target.closest('[
 </style>
 <script>
 (()=>{if(typeof syncCanvasOutput!=='function')return;const original=syncCanvasOutput;syncCanvasOutput=(task,image)=>{if(!task?.canvasOutputNodeId&&!task?.canvasWorkspaceKey&&task?.flowType!=='canvas')return;return original(task,image)}})();
+</script>
+<script>
+(() => {
+  const DRAFT_KEY = 'aiWorkbenchWorkspaceDraftV1';
+  let draftTimer = 0;
+  const saveDraft = () => {
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(() => {
+      try {
+        const values = typeof readValues === 'function' ? readValues() : {};
+        localStorage.setItem(DRAFT_KEY, JSON.stringify({
+          type, values, refs: Array.isArray(refs) ? refs.filter(Boolean) : [],
+          platform: apiPlatform?.value, model: $('#model')?.value,
+          size: $('#size')?.value, ratio: $('#ratio')?.value,
+          quantity: quantity?.value, updatedAt: Date.now()
+        }));
+      } catch {}
+    }, 250);
+  };
+  const restoreDraft = () => {
+    try {
+      const draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
+      if (!draft || !draft.updatedAt || Date.now() - draft.updatedAt > 7 * 24 * 60 * 60 * 1000) return;
+      if (draft.platform) apiPlatform.value = draft.platform;
+      updatePlatformUI();
+      type = draft.type || type;
+      renderFields(draft.values || {});
+      if (draft.model && $('#model')) $('#model').value = draft.model;
+      if (draft.size && $('#size')) $('#size').value = draft.size;
+      if (draft.ratio && $('#ratio')) $('#ratio').value = draft.ratio;
+      if (draft.quantity && quantity) quantity.value = draft.quantity;
+      if (Array.isArray(draft.refs) && draft.refs.length) {
+        refs = draft.refs.slice(0, 10);
+        while (refs.length < 10) refs.push('');
+        storageSet(REFS_KEY, JSON.stringify(refs));
+        renderSlots();
+      }
+    } catch {}
+  };
+  restoreDraft();
+  document.addEventListener('input', saveDraft, true);
+  document.addEventListener('change', saveDraft, true);
+  addEventListener('beforeunload', saveDraft);
+
+  // Restore references before the normal edit handler renders the task form.
+  document.addEventListener('click', event => {
+    if (!event.target.closest('[data-action="edit"]')) return;
+    const task = findTask(event.target.closest('.task')?.dataset.key);
+    if (!task || !Array.isArray(task.refs)) return;
+    refs = task.refs.filter(Boolean).slice(0, 10);
+    while (refs.length < 10) refs.push('');
+    storageSet(REFS_KEY, JSON.stringify(refs));
+    renderSlots();
+    saveDraft();
+  }, true);
+
+  // Backfill old assets gradually. New assets already enter the same local cache.
+  const pending = assets.filter(asset => asset?.url && !asset.thumbnailUrl).slice(0, 100);
+  let active = 0;
+  const next = () => {
+    while (active < 2 && pending.length) {
+      const asset = pending.shift(); active++;
+      fetchJson('/api/cache-media', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({source:asset.url, kind:'assets'}) }, '缓存资产缩略图')
+        .then(data => { const current = findAsset(asset.key); if (current && data?.urls?.[0]) { current.thumbnailUrl = data.urls[0]; saveAssets(); } })
+        .catch(() => {}).finally(() => { active--; next(); });
+    }
+  };
+  next();
+})();
 </script>
 </html>
 
