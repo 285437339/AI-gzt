@@ -61,23 +61,33 @@ async function createWindow() {
     webPreferences: { contextIsolation: true, nodeIntegration: false }
   });
   win.loadURL(`http://127.0.0.1:${port}/?desktop=1`);
+  win.webContents.on('render-process-gone', () => { if (!win.isDestroyed()) setTimeout(() => win.reload(), 500); });
+  win.webContents.on('unresponsive', () => { if (!win.isDestroyed()) setTimeout(() => win.reload(), 1000); });
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (!url.startsWith(`http://127.0.0.1:${port}`)) shell.openExternal(url);
     return { action: 'deny' };
   });
   if (app.isPackaged) {
-    autoUpdater.autoDownload = true;
+    autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
     autoUpdater.on('update-available', info => {
-      dialog.showMessageBox(win, { type: 'info', title: '发现新版本', message: `发现新版本 ${info.version}，正在后台下载。` });
+      dialog.showMessageBox(win, { type: 'info', title: '发现新版本', message: `发现新版本 ${info.version}，是否立即下载？`, buttons: ['立即下载', '稍后'] }).then(({ response }) => {
+        if (response === 0) autoUpdater.downloadUpdate();
+      });
+    });
+    autoUpdater.on('download-progress', progress => {
+      win.setProgressBar(Math.max(0, Math.min(1, progress.percent / 100)));
+      win.setTitle(`谢梦雄创作台 - 正在下载更新 ${progress.percent.toFixed(0)}%`);
     });
     autoUpdater.on('update-downloaded', () => {
+      win.setProgressBar(-1);
+      win.setTitle('谢梦雄创作台');
       dialog.showMessageBox(win, { type: 'info', title: '更新已下载', message: '新版本已下载完成，重启工作台即可完成更新。', buttons: ['立即重启', '稍后'] }).then(({ response }) => {
         if (response === 0) autoUpdater.quitAndInstall();
       });
     });
-    autoUpdater.on('error', error => { console.warn('自动更新检查失败:', error.message); dialog.showErrorBox('自动更新失败', `无法检查新版本：${error.message}`); });
-    setTimeout(() => autoUpdater.checkForUpdates().catch(error => { console.warn('自动更新检查失败:', error.message); dialog.showErrorBox('自动更新失败', `无法检查新版本：${error.message}`); }), 2500);
+    autoUpdater.on('error', error => { win.setProgressBar(-1); win.setTitle('谢梦雄创作台'); console.warn('自动更新检查失败:', error.message); });
+    setTimeout(() => autoUpdater.checkForUpdates().catch(error => console.warn('自动更新检查失败:', error.message)), 2500);
   }
 }
 
