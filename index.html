@@ -281,6 +281,10 @@ html[data-skin="dark"] .canvas-toolbar button,html[data-skin="dark"] .canvas-too
 })();
 </script>
 <script>
+// Keep ordinary image/video tasks out of canvas output nodes.
+(()=>{if(typeof syncCanvasOutput!=='function')return;const original=syncCanvasOutput;syncCanvasOutput=(task,image)=>{if(!task?.canvasOutputNodeId&&!task?.canvasWorkspaceKey&&task?.flowType!=='canvas')return;return original(task,image)}})();
+</script>
+<script>
 var inspirationCategoryFilter={onchange:null},inspirationAddCategory={onclick:null};
 const schemas={person:[['人物以及服装',['人物特征','服装细节','动作姿态（包含身体角度，镜头里面的左右朝向）','产品佩戴方式']],['构图方式',['视角','布局','景深']],['核心产品',['产品名称','材质细节','关键标识']],['场景',['背景描述','场景元素']],['光影与质感',['光影设计','画面质感','整体配色','专业词汇']]],still:[['构图方式',['视角','布局','景深']],['核心产品',['产品名称','材质细节','关键标识']],['场景',['背景描述','场景元素']],['光影与质感',['光影设计','画面质感','整体配色','专业词汇']]]};
 const defaults={'人物特征':'亚洲年轻女性，五官精致立体，清冷高级脸，黑色微卷长发，清透自然妆容。','服装细节':'米白色工装衬衫外套，燕麦色针织长裙，松弛高级的户外 Quiet Luxury 风格。','动作姿态（包含身体角度，镜头里面的左右朝向）':'身体侧身四分之三朝向右侧，双手将包包捧于身前，头部微转向镜头。','产品佩戴方式':'右手握双提手，左手托住包底，产品位于身体前侧黄金视觉中心。','视角':'平视视角，中景镜头，聚焦人物上半身、手部与包包。','布局':'三分法构图，人物和包包位于中央偏左，右侧留出山水空间。','景深':'浅景深，主体清晰，背景溪流山峦柔和虚化。','产品名称':'复古深棕色皮质圆筒包 / 波士顿包。','材质细节':'高质感深棕色牛皮，细腻纹理与微弱哑光，浅金色金属配件。','关键标识':'包身中央立体抛光金色 R 字品牌 Logo。','背景描述':'宁静辽阔的荒野高原，薄雾山峦、浅滩溪流、鹅卵石与秋季草地。','场景元素':'流水、鹅卵石、枯黄草甸、远山、薄雾。','光影设计':'柔和自然散射光，头发与衣袖边缘有微微轮廓光。','画面质感':'胶片级时尚大片质感，皮革与织物纹理清晰，微弱胶片颗粒。','整体配色':'米白、燕麦、深棕为主，搭配枯黄草绿与冷灰蓝。','专业词汇':'Hasselblad photography, 85mm lens, f/2.8, soft diffused lighting, cinematic color grading, photorealistic.'};
