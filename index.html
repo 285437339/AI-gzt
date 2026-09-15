@@ -261,23 +261,26 @@ html[data-skin="dark"] .canvas-toolbar button,html[data-skin="dark"] .canvas-too
     }
   } catch {}
   let timer = 0;
-  const persist = () => {
-    clearTimeout(timer);
-    timer = setTimeout(() => {
+  const writeState = () => {
       const storage = {};
       for (let index = 0; index < localStorage.length; index += 1) {
         const key = localStorage.key(index);
         if (/^(aiWorkbench|refSlots$|reverseRefSlots$|grsaiKey$|grsaiUrl$|runninghubKey$|canvas)/.test(key)) storage[key] = localStorage.getItem(key);
       }
-      fetch('/api/workbench-state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ state: { updatedAt: Date.now(), storage } }) }).catch(() => {});
-    }, 500);
+      try { localStorage.setItem('aiWorkbenchLastPersistedAt', String(Date.now())); } catch {}
+      fetch('/api/workbench-state', { method: 'PUT', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ state: { updatedAt: Date.now(), storage } }) }).catch(() => {});
+  };
+  const persist = () => {
+    clearTimeout(timer);
+    timer = setTimeout(writeState, 250);
   };
   const originalSetItem = Storage.prototype.setItem;
   const originalRemoveItem = Storage.prototype.removeItem;
   Storage.prototype.setItem = function(key, value) { originalSetItem.call(this, key, value); if (this === localStorage) persist(); };
   Storage.prototype.removeItem = function(key) { originalRemoveItem.call(this, key); if (this === localStorage) persist(); };
   addEventListener('DOMContentLoaded', persist, { once: true });
-  addEventListener('beforeunload', persist);
+  addEventListener('pagehide', writeState);
+  addEventListener('beforeunload', writeState);
 })();
 </script>
 <script>

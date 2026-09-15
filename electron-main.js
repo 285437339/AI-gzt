@@ -6,6 +6,11 @@ const path = require('path');
 
 const ROOT = __dirname;
 let port = 4173;
+let recoveryTimer = null;
+let recoveryInProgress = false;
+
+// Disable the GPU path that commonly causes a blank Electron surface on some Windows drivers.
+app.disableHardwareAcceleration();
 
 function health(candidate) {
   return new Promise(resolve => {
@@ -60,9 +65,22 @@ async function createWindow() {
     title: '谢梦雄创作台',
     webPreferences: { contextIsolation: true, nodeIntegration: false }
   });
-  win.loadURL(`http://127.0.0.1:${port}/?desktop=1`);
-  win.webContents.on('render-process-gone', () => { if (!win.isDestroyed()) setTimeout(() => win.reload(), 500); });
-  win.webContents.on('unresponsive', () => { if (!win.isDestroyed()) setTimeout(() => win.reload(), 1000); });
+  const loadWorkbench = () => win.loadURL(`http://127.0.0.1:${port}/?desktop=1&recovery=${Date.now()}`);
+  const recoverRenderer = reason => {
+    if (win.isDestroyed() || recoveryInProgress) return;
+    recoveryInProgress = true;
+    clearTimeout(recoveryTimer);
+    recoveryTimer = setTimeout(async () => {
+      try { win.webContents.stop(); } catch {}
+      try { await loadWorkbench(); } catch (error) { console.warn(`工作台恢复失败（${reason}）:`, error.message); }
+      recoveryInProgress = false;
+    }, reason === 'gone' ? 700 : 1200);
+  };
+  loadWorkbench();
+  win.webContents.on('render-process-gone', (_event, details) => recoverRenderer(details?.reason || 'gone'));
+  win.webContents.on('unresponsive', () => recoverRenderer('unresponsive'));
+  win.webContents.on('responsive', () => { recoveryInProgress = false; });
+  win.webContents.on('did-fail-load', (_event, code, description) => { if (code !== -3) recoverRenderer(`load:${description}`); });
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (!url.startsWith(`http://127.0.0.1:${port}`)) shell.openExternal(url);
     return { action: 'deny' };
