@@ -1553,21 +1553,23 @@ canvasNodes.addEventListener('input',event=>{const input=event.target.closest('[
 </script>
 <script>
 (() => {
-  const DRAFT_KEY = 'aiWorkbenchWorkspaceDraftV1';
+const DRAFT_KEY = 'aiWorkbenchWorkspaceDraftV2';
   let draftTimer = 0;
-  const saveDraft = () => {
-    clearTimeout(draftTimer);
-    draftTimer = setTimeout(() => {
+  const writeDraft = () => {
       try {
         const values = typeof readValues === 'function' ? readValues() : {};
         localStorage.setItem(DRAFT_KEY, JSON.stringify({
           type, values, refs: Array.isArray(refs) ? refs.filter(Boolean) : [],
           platform: apiPlatform?.value, model: $('#model')?.value,
           size: $('#size')?.value, ratio: $('#ratio')?.value,
-          quantity: quantity?.value, updatedAt: Date.now()
+          quantity: quantity?.value, selectedCustomTemplateKey, customTemplates,
+          editableDefaults, updatedAt: Date.now()
         }));
       } catch {}
-    }, 250);
+  };
+  const saveDraft = () => {
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(writeDraft, 150);
   };
   const restoreDraft = () => {
     try {
@@ -1576,6 +1578,9 @@ canvasNodes.addEventListener('input',event=>{const input=event.target.closest('[
       if (draft.platform) apiPlatform.value = draft.platform;
       updatePlatformUI();
       type = draft.type || type;
+      if (Array.isArray(draft.customTemplates)) { customTemplates = draft.customTemplates; saveCustomTemplates(); }
+      if (draft.editableDefaults && typeof draft.editableDefaults === 'object') { editableDefaults = draft.editableDefaults; saveEditableDefaults(); }
+      selectedCustomTemplateKey = draft.selectedCustomTemplateKey || '';
       renderFields(draft.values || {});
       if (draft.model && $('#model')) $('#model').value = draft.model;
       if (draft.size && $('#size')) $('#size').value = draft.size;
@@ -1592,7 +1597,8 @@ canvasNodes.addEventListener('input',event=>{const input=event.target.closest('[
   restoreDraft();
   document.addEventListener('input', saveDraft, true);
   document.addEventListener('change', saveDraft, true);
-  addEventListener('beforeunload', saveDraft);
+  addEventListener('pagehide', writeDraft);
+  addEventListener('beforeunload', writeDraft);
 
   // Restore references before the normal edit handler renders the task form.
   document.addEventListener('click', event => {
