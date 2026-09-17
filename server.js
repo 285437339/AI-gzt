@@ -9,8 +9,11 @@ const UPSTREAM_HOST = process.env.GRSAI_API_HOST || 'grsai.dakka.com.cn';
 const SERVICE_VERSION = '2026-09-01-portable-v5';
 const ALLOWED_UPSTREAM_HOSTS = new Set(['grsai.dakka.com.cn', 'grsaiapi.com']);
 const RUNNINGHUB_HOST = 'www.runninghub.cn';
+const RUNNINGHUB_GLOBAL_HOST = 'www.runninghub.ai';
 const RUNNINGHUB_LLM_HOST = 'llm.runninghub.cn';
+const RUNNINGHUB_GLOBAL_LLM_HOST = 'llm.runninghub.ai';
 const RUNNINGHUB_API_BASE = '/openapi/v2';
+const RUNNINGHUB_LLM_HOSTS = new Set([RUNNINGHUB_LLM_HOST, RUNNINGHUB_GLOBAL_LLM_HOST]);
 const UPSTREAM_LOG_FILE = path.join(__dirname, 'upstream-error.log');
 const SETTINGS_DIR = path.join(process.env.APPDATA || process.env.LOCALAPPDATA || path.join(require('os').homedir(), 'AppData', 'Roaming'), 'XieMengxiongWorkbench');
 const WORKBENCH_SETTINGS_FILE = path.join(SETTINGS_DIR, 'workbench-settings.json');
@@ -338,7 +341,7 @@ function proxyToHost(req, res, hostname, route, body, contentType = 'application
     'User-Agent': 'AI-Workbench/1.0'
   };
   forwardHeader(req, headers, 'authorization', 'Authorization');
-  for (const name of ['rh-token', 'rh-comfy-auth', 'rh-identify', 'x-team-id', 'user-language', 'client', 'x-trace-id', 'trace-id', 'x-request-id', 'request-id', 'traceparent']) {
+  for (const name of ['x-runninghub-region', 'rh-token', 'rh-comfy-auth', 'rh-identify', 'x-team-id', 'user-language', 'client', 'x-trace-id', 'trace-id', 'x-request-id', 'request-id', 'traceparent']) {
     forwardHeader(req, headers, name);
   }
   const upstream = https.request({ hostname, path: route, method: req.method, headers, timeout: 600000 }, upstreamRes => {
@@ -352,14 +355,14 @@ function proxyToHost(req, res, hostname, route, body, contentType = 'application
       });
       const response = Buffer.concat(chunks).toString('utf8');
       if (shouldLogUpstreamResponse(upstreamRes.statusCode, response)) {
-        logUpstreamError(hostname === RUNNINGHUB_LLM_HOST ? 'runninghub-llm' : 'runninghub', hostname, route, upstreamRes.statusCode, response);
+        logUpstreamError(RUNNINGHUB_LLM_HOSTS.has(hostname) ? 'runninghub-llm' : 'runninghub', hostname, route, upstreamRes.statusCode, response);
       }
       res.end(response);
     });
   });
   upstream.setTimeout(600000, () => upstream.destroy(new Error('RunningHub 请求超时')));
   upstream.on('error', error => {
-    logUpstreamError(hostname === RUNNINGHUB_LLM_HOST ? 'runninghub-llm-connection' : 'runninghub-connection', hostname, route, 502, '', error.message);
+    logUpstreamError(RUNNINGHUB_LLM_HOSTS.has(hostname) ? 'runninghub-llm-connection' : 'runninghub-connection', hostname, route, 502, '', error.message);
     if (res.headersSent) return;
     sendJson(res, 502, { error: `RunningHub 连接失败: ${error.message}` });
   });
@@ -377,7 +380,7 @@ async function uploadRunningHubImage(req, res) {
     const boundary = `----AIWorkbench${Date.now().toString(16)}`;
     const head = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${match[1]}\r\n\r\n`);
     const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
-    proxyToHost(req, res, RUNNINGHUB_HOST, `${RUNNINGHUB_API_BASE}/media/upload/binary`, Buffer.concat([head, binary, tail]), `multipart/form-data; boundary=${boundary}`);
+    proxyToHost(req, res, req.headers['x-runninghub-region'] === 'global' ? RUNNINGHUB_GLOBAL_HOST : RUNNINGHUB_HOST, `${RUNNINGHUB_API_BASE}/media/upload/binary`, Buffer.concat([head, binary, tail]), `multipart/form-data; boundary=${boundary}`);
   } catch (error) {
     sendJson(res, 400, { error: `上传图片失败: ${error.message}` });
   }
@@ -586,14 +589,14 @@ const server = http.createServer((req, res) => {
   if (req.url.startsWith('/rh-api/')) {
     const chunks = [];
     req.on('data', chunk => chunks.push(chunk));
-    req.on('end', () => proxyToHost(req, res, RUNNINGHUB_HOST, `${RUNNINGHUB_API_BASE}/${req.url.slice('/rh-api/'.length)}`, Buffer.concat(chunks)));
+    req.on('end', () => proxyToHost(req, res, req.headers['x-runninghub-region'] === 'global' ? RUNNINGHUB_GLOBAL_HOST : RUNNINGHUB_HOST, `${RUNNINGHUB_API_BASE}/${req.url.slice('/rh-api/'.length)}`, Buffer.concat(chunks)));
     return;
   }
 
   if (req.url.startsWith('/rh-llm/')) {
     const chunks = [];
     req.on('data', chunk => chunks.push(chunk));
-    req.on('end', () => proxyToHost(req, res, RUNNINGHUB_LLM_HOST, `/${req.url.slice('/rh-llm/'.length)}`, Buffer.concat(chunks)));
+    req.on('end', () => proxyToHost(req, res, req.headers['x-runninghub-region'] === 'global' ? RUNNINGHUB_GLOBAL_LLM_HOST : RUNNINGHUB_LLM_HOST, `/${req.url.slice('/rh-llm/'.length)}`, Buffer.concat(chunks)));
     return;
   }
 

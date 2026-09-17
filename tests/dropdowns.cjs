@@ -56,8 +56,10 @@ delete env.ELECTRON_RUN_AS_NODE;
     assert.equal(page.url(), url);
 
     // All existing change handlers still receive the original select as target.
-    await open('#generationPlatform'); await choose('RunningHub');
+    await open('#generationPlatform'); await choose('RunningHub 国内');
     assert.equal(await page.locator('#apiPlatform').inputValue(), 'runninghub');
+    await open('#generationPlatform'); await choose('RunningHub 海外');
+    assert.equal(await page.locator('#apiPlatform').inputValue(), 'runninghub-global');
     await open('#generationPlatform'); await choose('Grsai');
     await open('#model'); await choose('gpt-image-2-vip');
     assert.equal(await page.locator('#model').inputValue(), 'gpt-image-2-vip');
