@@ -248,55 +248,7 @@ html[data-skin="dark"] .canvas-toolbar button,html[data-skin="dark"] .canvas-too
  <dialog class="lightbox" id="lightbox"><button class="lightbox-close" id="lightboxClose" type="button" aria-label="关闭大图">×</button><figure><img id="lightboxImage" alt="生成图片大图"><figcaption id="lightboxCaption"></figcaption></figure></dialog>
  <dialog class="template-name-dialog" id="templateNameDialog"><form method="dialog"><h3>新建模板</h3><label for="templateNameInput">模板名称</label><input id="templateNameInput" autocomplete="off" placeholder="例如：户外人像模板"><div class="template-name-actions"><button value="cancel" type="submit">取消</button><button id="templateNameConfirm" value="default" type="submit">确定</button></div></form></dialog>
  <dialog class="assistant-editor" id="assistantEditorDialog"><form id="assistantEditorForm"><h3 id="assistantEditorTitle">新建提示词</h3><label for="assistantEditorName">名称</label><input id="assistantEditorName" required maxlength="80" placeholder="例如：电商产品主图"><label for="assistantEditorCategory">分类</label><input id="assistantEditorCategory" required maxlength="40" placeholder="例如：常用"><label for="assistantEditorContent">提示词内容</label><textarea id="assistantEditorContent" required placeholder="输入完整提示词"></textarea><div class="assistant-editor-actions"><button id="assistantEditorCancel" type="button">取消</button><button type="submit">保存</button></div></form></dialog>
-<script>
-(() => {
-  if (!/^https?:$/.test(location.protocol)) return;
-  const meaningful = value => value !== null && value !== '' && value !== '[]' && value !== '{}';
-  try {
-    const request = new XMLHttpRequest();
-    request.open('GET', '/api/workbench-state', false);
-    request.send();
-    const stored = JSON.parse(request.responseText || '{}')?.state?.storage || {};
-    for (const [key, value] of Object.entries(stored)) {
-      const local = localStorage.getItem(key);
-      if ((key === 'aiWorkbenchTasksV3' || key === 'aiWorkbenchAssetsV1') && meaningful(local) && meaningful(value)) {
-        try {
-          const localItems = JSON.parse(local), remoteItems = JSON.parse(value);
-          if (Array.isArray(localItems) && Array.isArray(remoteItems)) {
-            const merged = new Map([...remoteItems, ...localItems].filter(item => item && item.key).map(item => [item.key, item]));
-            localStorage.setItem(key, JSON.stringify([...merged.values()].sort((a,b) => Number(b.createdAt||0) - Number(a.createdAt||0))));
-            continue;
-          }
-        } catch {}
-      }
-      if (!meaningful(local) && meaningful(value)) localStorage.setItem(key, value);
-    }
-  } catch {}
-  let timer = 0;
-  const writeState = () => {
-      const storage = {};
-      for (let index = 0; index < localStorage.length; index += 1) {
-        const key = localStorage.key(index);
-        if (/^(aiWorkbench|refSlots$|reverseRefSlots$|grsaiKey$|grsaiUrl$|runninghubKey$|canvas)/.test(key)) storage[key] = localStorage.getItem(key);
-      }
-      try { localStorage.setItem('aiWorkbenchLastPersistedAt', String(Date.now())); } catch {}
-      fetch('/api/workbench-state', { method: 'PUT', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ state: { updatedAt: Date.now(), storage } }) }).catch(() => {});
-  };
-  const persist = () => {
-    clearTimeout(timer);
-    timer = setTimeout(writeState, 250);
-  };
-  window.addEventListener('pagehide', writeState);
-  window.addEventListener('beforeunload', writeState);
-  const originalSetItem = Storage.prototype.setItem;
-  const originalRemoveItem = Storage.prototype.removeItem;
-  Storage.prototype.setItem = function(key, value) { originalSetItem.call(this, key, value); if (this === localStorage) persist(); };
-  Storage.prototype.removeItem = function(key) { originalRemoveItem.call(this, key); if (this === localStorage) persist(); };
-  addEventListener('DOMContentLoaded', persist, { once: true });
-  addEventListener('pagehide', writeState);
-  addEventListener('beforeunload', writeState);
-})();
-</script>
+<script src="workbench-state.js"></script>
 <script>
 // Keep ordinary image/video tasks out of canvas output nodes.
 (()=>{if(typeof syncCanvasOutput!=='function')return;const original=syncCanvasOutput;syncCanvasOutput=(task,image)=>{if(!task?.canvasOutputNodeId&&!task?.canvasWorkspaceKey&&task?.flowType!=='canvas')return;return original(task,image)}})();
@@ -377,7 +329,7 @@ function saveEditableReverseTemplates(){storageSet(EDITABLE_REVERSE_TEMPLATES_KE
  function saveImportedInspirations(){storageSet(INSPIRATIONS_KEY,JSON.stringify(importedInspirations))}
  function readInspirationCategories(){try{const value=JSON.parse(localStorage.getItem(INSPIRATION_CATEGORIES_KEY)||'[]');const items=Array.isArray(value)?value.map(item=>String(item||'').trim()).filter(Boolean):[];return ['未分类','图片生成','无限画布',...items.filter(item=>!['未分类','图片生成','无限画布'].includes(item))]}catch{return['未分类','图片生成','无限画布']}}
  function saveInspirationCategories(){storageSet(INSPIRATION_CATEGORIES_KEY,JSON.stringify(inspirationCategories))}
- const MAX_TASKS=200,MAX_ASSETS=50,ASSET_RETENTION_MS=3650*24*60*60*1000;
+ const MAX_ASSETS=50,ASSET_RETENTION_MS=3650*24*60*60*1000;
  let currentFieldNames={};
  let type='person',slot=0,reverseSlot=0,refs=readRefs(),reverseRefs=readStoredRefs(REVERSE_REFS_KEY),editableDefaults=readEditableDefaults(),editableReverseTemplates=readEditableReverseTemplates(),customTemplates=readCustomTemplates(),customReverseTemplates=readCustomReverseTemplates(),assistantTemplates=readAssistantTemplates(),assistantCategory='全部',assistantQuery='',importedInspirations=readImportedInspirations(),inspirationCategories=readInspirationCategories(),inspirationCategory='全部',selectedCustomTemplateKey='',selectedReverseTemplateKey='',tasks=readTasks(),assets=readAssets(),polling=new Set(),pasteTarget=null,taskRenderFrame=0,taskSaveTimer=0,assetSaveTimer=0,expandedTasks=new Set(),taskScrollTimer=0,isTaskScrolling=false,pendingTaskRender=false,assetPage=0,assetPageSize=24;
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -399,23 +351,24 @@ function uid(){return (crypto.randomUUID?crypto.randomUUID():Date.now()+'-'+Math
 function readStoredRefs(key){try{const v=JSON.parse(localStorage.getItem(key)||'[]');return Array.isArray(v)?v:[]}catch{return[]}}
 function readRefs(){return readStoredRefs(REFS_KEY)}
 function taskTime(task){const value=Number(task?.createdAt||task?.submittedAt||0);return Number.isFinite(value)?value:0}
-function readTasks(){try{const current=JSON.parse(localStorage.getItem(TASKS_KEY)||'null');if(Array.isArray(current))return current.filter(t=>t&&typeof t==='object').sort((a,b)=>taskTime(b)-taskTime(a)).slice(0,MAX_TASKS)}
+function readTasks(){try{const current=JSON.parse(localStorage.getItem(TASKS_KEY)||'null');if(Array.isArray(current))return current.filter(t=>t&&typeof t==='object').sort((a,b)=>taskTime(b)-taskTime(a))}
   catch{}
   try{const old=JSON.parse(localStorage.getItem('aiTasks')||'[]');if(Array.isArray(old)){return old.map(html=>{const d=new DOMParser().parseFromString(html,'text/html').querySelector('.task');if(!d)return null;try{const t=JSON.parse(decodeURIComponent(d.dataset.task||''));return {...t,key:t.key||uid(),status:t.status==='已完成'?'succeeded':t.status==='失败'?'failed':'running',type:'person'}}catch{return null}}).filter(Boolean)}}catch{}
   return[]}
 function stripAssetSaveState(asset){if(!asset||typeof asset!=='object')return asset;const clean={...asset};delete clean.saveStatus;delete clean.savedPath;delete clean.saveError;return clean}
 function readAssets(){const cutoff=Date.now()-ASSET_RETENTION_MS;try{const current=JSON.parse(localStorage.getItem(ASSETS_KEY)||'null');if(Array.isArray(current))return current.filter(a=>a&&typeof a==='object'&&(!taskTime(a)||taskTime(a)>=cutoff)).map(a=>({...stripAssetSaveState(a),flowType:a.flowType==='canvas'?'canvas':'image',canvasWorkspaceKey:a.canvasWorkspaceKey||''}))}catch{}return tasks.filter(t=>t&&typeof t==='object'&&t.image&&(!taskTime(t)||taskTime(t)>=cutoff)).map(t=>({key:uid(),taskKey:t.key,url:t.image,title:t.model,model:t.model,flowType:t.flowType==='canvas'?'canvas':'image',canvasWorkspaceKey:t.canvasWorkspaceKey||'',createdAt:t.createdAt||Date.now(),prompt:t.prompt,refs:t.refs||[]}))}
 function pruneAssets(){const cutoff=Date.now()-ASSET_RETENTION_MS;assets=assets.filter(asset=>!taskTime(asset)||taskTime(asset)>=cutoff);if(assets.length>MAX_ASSETS)assets.length=MAX_ASSETS}
-function pruneTasks(){tasks.sort((a,b)=>taskTime(b)-taskTime(a));if(tasks.length>MAX_TASKS)tasks.length=MAX_TASKS}
-function save(){pruneTasks();const full=JSON.stringify(tasks);try{localStorage.setItem(TASKS_KEY,full);return true}catch(error){if(!/QuotaExceeded|quota|storage/i.test(String(error?.name||'')+' '+String(error?.message||'')))return false;try{const compact=JSON.stringify(tasks.map(task=>{const copy={...task};delete copy.refs;return copy}));localStorage.setItem(TASKS_KEY,compact);return false}catch{return false}}}
-function saveAssets(){pruneAssets();try{localStorage.setItem(ASSETS_KEY,JSON.stringify(assets.map(stripAssetSaveState)));return true}catch(error){if(!/QuotaExceeded|quota|storage/i.test(String(error?.name||'')+' '+String(error?.message||'')))return false;try{localStorage.setItem(ASSETS_KEY,JSON.stringify(assets.map(asset=>{const copy={...stripAssetSaveState(asset)};delete copy.prompt;return copy})));return false}catch{return false}}}
+function pruneTasks(){tasks.sort((a,b)=>taskTime(b)-taskTime(a))}
+function save(){pruneTasks();localStorage.setItem(TASKS_KEY,JSON.stringify(tasks));return true}
+function saveAssets(){pruneAssets();localStorage.setItem(ASSETS_KEY,JSON.stringify(assets.map(stripAssetSaveState)));return true}
+window.workbenchState?.registerFlusher(()=>{clearTimeout(taskSaveTimer);taskSaveTimer=0;clearTimeout(assetSaveTimer);assetSaveTimer=0;save();saveAssets()});
   function storageSet(key,value){try{localStorage.setItem(key,value);return true}catch{return false}}
   const DEFAULT_WORKBENCH_SETTINGS={version:'1',platform:'grsai',apiUrl:'https://grsai.dakka.com.cn/v1/api/generate',apiKey:'',runninghubKey:'',saveDir:'',filenameTemplate:'{model}_{date}_{id}.png',startupView:'workspace',keepRefs:true,skin:'dark',normalChannel:false,datePicker:true,clearHistory:false,clearBoard:false,photoshopPath:'',assetDir:'',cacheDir:'',psdResources:false,cacheLimit:5,updatedAt:0};
   const SETTINGS_VIEWS=new Set(['workspace','reverse','projects','history','task-board','inspiration','assistant','assets','settings']);
   function normalizeWorkbenchSettings(value){const source=value&&typeof value==='object'?value:{};return {version:'1',platform:source.platform==='runninghub'?'runninghub':'grsai',apiUrl:String(source.apiUrl??DEFAULT_WORKBENCH_SETTINGS.apiUrl).trim().slice(0,500),apiKey:String(source.apiKey??''),runninghubKey:String(source.runninghubKey??''),saveDir:String(source.saveDir??'').trim().slice(0,1000),filenameTemplate:String(source.filenameTemplate??DEFAULT_WORKBENCH_SETTINGS.filenameTemplate).trim().slice(0,180)||DEFAULT_WORKBENCH_SETTINGS.filenameTemplate,startupView:SETTINGS_VIEWS.has(String(source.startupView))?String(source.startupView):'workspace',keepRefs:source.keepRefs!==false,skin:['dark','soft','warm','light'].includes(source.skin)?source.skin:'dark',normalChannel:source.normalChannel===true,datePicker:source.datePicker!==false,clearHistory:source.clearHistory===true,clearBoard:source.clearBoard===true,photoshopPath:String(source.photoshopPath??'').trim().slice(0,1000),assetDir:String(source.assetDir??'').trim().slice(0,1000),cacheDir:String(source.cacheDir??'').trim().slice(0,1000),psdResources:source.psdResources===true,cacheLimit:Math.min(100,Math.max(1,Number(source.cacheLimit)||5)),updatedAt:Number(source.updatedAt)||Date.now()}}
   function readWorkbenchSettings(){try{return normalizeWorkbenchSettings(JSON.parse(localStorage.getItem(SETTINGS_KEY)||'{}'))}catch{return normalizeWorkbenchSettings({})}}
   let workbenchSettings=readWorkbenchSettings();
-  if(workbenchSettings.clearHistory||workbenchSettings.clearBoard){localStorage.removeItem(TASKS_KEY);if(workbenchSettings.clearHistory)localStorage.removeItem(ASSETS_KEY);workbenchSettings.clearHistory=false;workbenchSettings.clearBoard=false;storageSet(SETTINGS_KEY,JSON.stringify(workbenchSettings))}
+  if(workbenchSettings.clearHistory||workbenchSettings.clearBoard){tasks=[];save();if(workbenchSettings.clearHistory){assets=[];saveAssets()}workbenchSettings.clearHistory=false;workbenchSettings.clearBoard=false;storageSet(SETTINGS_KEY,JSON.stringify(workbenchSettings))}
   const DEFAULT_PROJECT={id:'default',name:'默认项目',description:'未指定项目的历史任务',createdAt:0};
   function readProjects(){try{const value=JSON.parse(localStorage.getItem(PROJECTS_KEY)||'[]');const items=Array.isArray(value)?value.filter(item=>item&&item.id&&item.name).map(item=>({id:String(item.id),name:String(item.name).trim().slice(0,80),description:String(item.description||'').trim().slice(0,240),createdAt:Number(item.createdAt)||Date.now()})).filter(item=>item.name):[];if(!items.some(item=>item.id==='default'))items.unshift({...DEFAULT_PROJECT});return items}catch{return[{...DEFAULT_PROJECT}]}}
   let projects=readProjects(),activeProjectId=localStorage.getItem(ACTIVE_PROJECT_KEY)||'default';
@@ -426,9 +379,9 @@ function saveAssets(){pruneAssets();try{localStorage.setItem(ASSETS_KEY,JSON.str
   function taskProjectName(task){return projects.find(project=>project.id===taskProjectId(task))?.name||DEFAULT_PROJECT.name}
   function renderProjectFilter(){if(!historyProjectFilter)return;historyProjectFilter.innerHTML='<option value="all">全部项目</option>'+projects.map(project=>`<option value="${esc(project.id)}">${esc(project.name)}</option>`).join('');historyProjectFilter.value=historyProjectFilter.value||'all'}
   function renderProjects(){if(!projectGrid)return;projectSummary.textContent=`${projects.length} 个项目 · 当前：${activeProject().name}`;projectGrid.innerHTML=projects.length?projects.map(project=>{const count=tasks.filter(task=>taskProjectId(task)===project.id).length;return `<article class="project-card${project.id===activeProjectId?' active':''}" data-project-id="${esc(project.id)}"><h2 title="${esc(project.name)}">${esc(project.name)}</h2><p>${esc(project.description||'暂无项目描述')}</p><p>${count} 条任务</p>${project.id===activeProjectId?'<div class="project-active">当前项目</div>':''}<div class="project-actions"><button data-project-action="use" type="button">使用项目</button><button data-project-action="rename" type="button">重命名</button>${project.id!=='default'?'<button data-project-action="delete" type="button">删除</button>':''}</div></article>`}).join(''):'<div class="project-empty">还没有项目。</div>';renderProjectFilter();updateTaskCount()}
-  function renderHistory(){if(!historyList)return;const query=(historySearch?.value||'').trim().toLowerCase(),project=historyProjectFilter?.value||'all',status=historyStatusFilter?.value||'all';const visible=tasks.filter(task=>{const text=`${task.prompt||''} ${task.model||''} ${task.id||''}`.toLowerCase();const taskStatus=taskOutputs(task)?(task.status==='partial'?'failed':task.status):task.status;return(!query||text.includes(query))&&(project==='all'||taskProjectId(task)===project)&&(status==='all'||taskStatus===status)});historyCount.textContent=`显示 ${visible.length}/${tasks.length} 条`;historyList.innerHTML=visible.length?visible.map(taskHTML).join(''):'<div class="management-empty">没有匹配的历史记录。</div>'}
+  function renderHistory(){if(!historyList)return;const query=(historySearch?.value||'').trim().toLowerCase(),project=historyProjectFilter?.value||'all',status=historyStatusFilter?.value||'all';const visible=tasks.filter(task=>{const text=`${task.prompt||''} ${task.model||''} ${task.id||''}`.toLowerCase();const taskStatus=taskOutputs(task)?(task.status==='partial'?'failed':task.status):task.status;return(!query||text.includes(query))&&(project==='all'||taskProjectId(task)===project)&&(status==='all'||taskStatus===status)});historyCount.textContent=`显示 ${visible.length}/${tasks.length} 条`;historyList.innerHTML=visible.length?taskPageHTML(visible,'history'):'<div class="management-empty">没有匹配的历史记录。</div>'}
   function boardStatus(task){if(task.status==='partial'||task.status==='violation'||task.status==='timeout'||task.status==='failed')return'failed';if(task.status==='succeeded')return'succeeded';if(task.status==='queued')return'queued';return'running'}
-  function renderTaskBoard(){if(!taskBoardColumns)return;const groups={queued:[],running:[],succeeded:[],failed:[]};tasks.forEach(task=>groups[boardStatus(task)].push(task));for(const [status,items] of Object.entries(groups)){const target=$(`#taskBoard${status[0].toUpperCase()+status.slice(1)}`),count=$(`#taskBoard${status[0].toUpperCase()+status.slice(1)}Count`);if(count)count.textContent=String(items.length);if(target)target.innerHTML=items.length?items.map(taskHTML).join(''):'<div class="task-board-empty">暂无任务</div>'}if(taskBoardSummary)taskBoardSummary.textContent=`共 ${tasks.length} 条任务`}
+  function renderTaskBoard(){if(!taskBoardColumns)return;const groups={queued:[],running:[],succeeded:[],failed:[]};tasks.forEach(task=>groups[boardStatus(task)].push(task));for(const [status,items] of Object.entries(groups)){const target=$(`#taskBoard${status[0].toUpperCase()+status.slice(1)}`),count=$(`#taskBoard${status[0].toUpperCase()+status.slice(1)}Count`);if(count)count.textContent=String(items.length);if(target)target.innerHTML=items.length?taskPageHTML(items,'board-'+status):'<div class="task-board-empty">暂无任务</div>'}if(taskBoardSummary)taskBoardSummary.textContent=`共 ${tasks.length} 条任务`}
   function updateTaskCount(){if(taskCount)taskCount.textContent=String(tasks.length)}
   function settingsSnapshot(){return normalizeWorkbenchSettings({platform:settingsPlatform?.value||apiPlatform?.value,apiUrl:settingsApiUrl?.value||apiUrl?.value,apiKey:settingsApiKey?.value??apiKey?.value,runninghubKey:settingsRunninghubKey?.value??runninghubKey?.value,saveDir:settingsSaveDir?.value??saveDir?.value,startupView:settingsStartupView?.value||workbenchSettings.startupView,keepRefs:settingsKeepRefs?.checked??workbenchSettings.keepRefs})}
   function setSettingsStatus(message,kind=''){if(!settingsStatus)return;settingsStatus.textContent=message||'';settingsStatus.className=`settings-status${kind?` ${kind}`:''}`}
@@ -493,10 +446,13 @@ function taskOutputs(t){return Array.isArray(t?.outputs)&&t.outputs.length?t.out
 function taskStatusText(t){const outputs=taskOutputs(t);if(!outputs)return statusLabel(t.status);const succeeded=outputs.filter(output=>output.status==='succeeded').length,failed=outputs.filter(output=>['failed','violation','timeout'].includes(output.status)).length,total=outputs.length;if(succeeded===total)return `已完成 ${succeeded}/${total}`;if(failed===total)return `失败 ${failed}/${total}`;return `${statusLabel(t.status)} ${succeeded+failed}/${total}`}
 function outputHTML(output,index){if(output.image)return `<button class="result-output" data-output-image="${esc(output.sourceImage||output.image)}" data-output-index="${index}" type="button" title="查看第${index+1}张大图"><img src="${esc(output.image)}" loading="lazy" alt="生成结果 ${index+1}"></button>`;if(['failed','violation','timeout'].includes(output.status))return `<div class="result-output output-failed" title="${esc(output.error||'生成失败')}">第${index+1}张<br>生成失败</div>`;return `<div class="result-output"><div class="loading">第${index+1}张<br>${esc(statusLabel(output.status)||'等待结果')}</div></div>`}
 function taskHTML(t){t=t&&typeof t==='object'?t:{};const taskRefs=Array.isArray(t.refs)?t.refs:[],outputs=taskOutputs(t),isExpanded=expandedTasks.has(t.key),result=outputs?outputs.map(outputHTML).join(''):(t.image?`<img src="${esc(t.image)}" loading="lazy" alt="生成结果">`:`<div class="loading">${esc(t.status==='failed'||t.status==='violation'?statusLabel(t.status):'等待结果...')}</div>`),error=t.error?`<div class="error">${esc(t.error)}</div>`:'',progress=outputs?`<div class="progress">已处理 ${outputs.filter(output=>['succeeded','failed','violation','timeout'].includes(output.status)).length}/${outputs.length} 张</div>`:typeof t.progress==='number'&&t.status==='running'?`<div class="progress">进度 ${t.progress}%</div>`:'',saveState=t.saveStatus==='saving'?'<div class="save-state">正在保存到设置目录...</div>':t.saveStatus==='saved'?(t.saveWarning?`<div class="save-state ok">${esc(t.saveWarning)}：${esc(t.savedPath||'工作台 generated')}</div>`:`<div class="save-state ok">已保存：${esc(t.savedPath||'设置目录')}</div>`):t.saveStatus==='failed'?`<div class="save-state fail">自动保存失败：${esc(t.saveError||'未知错误')}</div>`:'',canSync=outputs?outputs.some(output=>output.id&&!['succeeded','failed','violation'].includes(output.status)):t.id&&t.status!=='succeeded';return `<article class="task" data-key="${esc(t.key)}"><div class="task-head"><div class="task-ref">${taskRefs.slice(0,10).filter(x=>typeof x==='string').map(x=>`<img src="${esc(x)}" loading="lazy" alt="参考图">`).join('')}</div><div><div class="prompt${isExpanded?' open':''}">${esc(t.prompt)}</div><button class="expand" type="button">${isExpanded?'收起':'展开'}</button><div class="meta">${esc(t.model)} · ${esc(t.size)} · ${esc(t.ratio)} · 提交时间：${esc(formatTaskTime(t.createdAt||t.submittedAt))}</div>${t.id?`<div class="task-id">ID: ${esc(t.id)}</div>`:''}</div><span class="status ${statusClass(t.status)}">${esc(taskStatusText(t))}</span></div><div class="result${outputs?' result-grid':''}">${result}</div>${progress}${error}${saveState}<div class="actions"><button data-action="edit" type="button">✎ 重新编辑</button><button data-action="again" type="button">↻ 再次生成</button>${canSync?'<button data-action="sync" type="button">↻ 同步结果</button>':''}<button data-action="delete" type="button">删除</button></div></article>`}
-function renderTasks(){list.innerHTML=tasks.length?tasks.map(taskHTML).join(''):'<div class="empty">还没有提交任务</div>';updateTaskCount();if(!historyView.hidden)renderHistory();if(!taskBoardView.hidden)renderTaskBoard();if(!projectsView.hidden)renderProjects()}
+const taskPages=new Map();
+function taskPageHTML(items,view){const pageSize=40,page=Math.min(taskPages.get(view)||0,Math.max(0,Math.ceil(items.length/pageSize)-1));taskPages.set(view,page);const content=items.slice(page*pageSize,(page+1)*pageSize).map(taskHTML).join('');if(items.length<=pageSize)return content;return content+`<div class="task-pagination"><button type="button" data-task-page="${view}" data-page="${page-1}" ${page===0?'disabled':''}>上一页</button><span> 第 ${page+1}/${Math.ceil(items.length/pageSize)} 页 · 共 ${items.length} 条 </span><button type="button" data-task-page="${view}" data-page="${page+1}" ${(page+1)*pageSize>=items.length?'disabled':''}>下一页</button></div>`}
+document.addEventListener('click',event=>{const button=event.target.closest('[data-task-page]');if(!button)return;taskPages.set(button.dataset.taskPage,Number(button.dataset.page));renderTasks()});
+function renderTasks(){list.innerHTML=tasks.length?taskPageHTML(tasks,'workspace'):'<div class="empty">还没有提交任务</div>';updateTaskCount();if(!historyView.hidden)renderHistory();if(!taskBoardView.hidden)renderTaskBoard();if(!projectsView.hidden)renderProjects()}
 function scheduleTasksRender(){if(isTaskScrolling){pendingTaskRender=true;return}if(taskRenderFrame)return;taskRenderFrame=requestAnimationFrame(()=>{taskRenderFrame=0;renderTasks()})}
-function scheduleTasksSave(){if(taskSaveTimer)clearTimeout(taskSaveTimer);taskSaveTimer=setTimeout(()=>{taskSaveTimer=0;const write=()=>save();if('requestIdleCallback' in window)requestIdleCallback(write,{timeout:1200});else write()},800)}
-function scheduleAssetsSave(){if(assetSaveTimer)clearTimeout(assetSaveTimer);assetSaveTimer=setTimeout(()=>{assetSaveTimer=0;const write=()=>saveAssets();if('requestIdleCallback' in window)requestIdleCallback(write,{timeout:1200});else write()},800)}
+function scheduleTasksSave(){if(taskSaveTimer)return;taskSaveTimer=setTimeout(()=>{taskSaveTimer=0;save()},200)}
+function scheduleAssetsSave(){if(assetSaveTimer)return;assetSaveTimer=setTimeout(()=>{assetSaveTimer=0;saveAssets()},200)}
 function updateAssetCount(){assetCount.textContent=String(assets.length);assetSummary.textContent=assets.length?`${assets.length} 张图片`:'暂无图片'}
 function setAssetFeedback(message,kind=''){assetFeedback.textContent=message||'';assetFeedback.className=`asset-feedback${kind?` ${kind}`:''}`}
 function assetSaveStateHTML(a){if(a.saveStatus==='saving')return '<div class="asset-save-state busy">正在保存到设置目录...</div>';if(a.saveStatus==='saved')return `<div class="asset-save-state ok">${a.saveWarning?esc(a.saveWarning):'已保存'}${a.savedPath?`：${esc(a.savedPath)}`:''}</div>`;if(a.saveStatus==='failed')return `<div class="asset-save-state fail">保存失败：${esc(a.saveError||'未知错误')}</div>`;return ''}
@@ -653,7 +609,7 @@ document.querySelectorAll('.nav button[data-view]').forEach(button=>button.oncli
  projectCreate.onclick=()=>{const name=window.prompt('项目名称','新项目');if(!name||!name.trim())return;const description=window.prompt('项目描述（可选）','')||'';const project={id:`project-${uid()}`,name:name.trim().slice(0,80),description:description.trim().slice(0,240),createdAt:Date.now()};projects.push(project);activeProjectId=project.id;saveProjects();renderProjects();setSubmitStatus(`已创建项目“${project.name}”。`,'ok')};
  projectSetDefault.onclick=()=>{const name=activeProject().name;setSubmitStatus(`当前项目为“${name}”，新任务会归入此项目。`,'ok')};
  projectGrid.onclick=e=>{const card=e.target.closest('.project-card');if(!card)return;const project=projects.find(item=>item.id===card.dataset.projectId);if(!project)return;const action=e.target.closest('[data-project-action]')?.dataset.projectAction;if(action==='use'){activeProjectId=project.id;saveProjects();renderProjects();setSubmitStatus(`已切换到项目“${project.name}”。`,'ok')}else if(action==='rename'){const name=window.prompt('项目名称',project.name);if(!name||!name.trim())return;project.name=name.trim().slice(0,80);saveProjects();renderProjects();setSubmitStatus('项目名称已更新。','ok')}else if(action==='delete'&&project.id!=='default'){if(!window.confirm(`确定删除项目“${project.name}”吗？项目内任务将保留并归入默认项目。`))return;tasks.forEach(task=>{if(taskProjectId(task)===project.id)task.projectId='default'});projects=projects.filter(item=>item.id!==project.id);if(activeProjectId===project.id)activeProjectId='default';saveProjects();save();renderProjects();renderHistory();renderTaskBoard();setSubmitStatus(`项目“${project.name}”已删除。`,'ok')}};
- historySearch.oninput=renderHistory;historyProjectFilter.onchange=renderHistory;historyStatusFilter.onchange=renderHistory;historyClearFilters.onclick=()=>{historySearch.value='';historyProjectFilter.value='all';historyStatusFilter.value='all';renderHistory()};historyList.onclick=handleTaskListClick;taskBoardColumns.onclick=handleTaskListClick;
+ const resetHistoryPage=()=>{taskPages.set('history',0);renderHistory()};historySearch.oninput=resetHistoryPage;historyProjectFilter.onchange=resetHistoryPage;historyStatusFilter.onchange=resetHistoryPage;historyClearFilters.onclick=()=>{historySearch.value='';historyProjectFilter.value='all';historyStatusFilter.value='all';renderHistory()};historyList.onclick=handleTaskListClick;taskBoardColumns.onclick=handleTaskListClick;
 function handleTaskListClick(e){const card=e.target.closest('.task');if(!card)return;const t=findTask(card.dataset.key);if(!t)return;const outputButton=e.target.closest('[data-output-image]');if(outputButton){openLightbox(outputButton.dataset.outputImage,`${t.prompt||'生成图片'} · 第${Number(outputButton.dataset.outputIndex)+1}张`);return}if(e.target.closest('.result img')){openLightbox(t.sourceImage||t.image,t.prompt);return}if(e.target.closest('.expand')){const expanded=!expandedTasks.has(t.key);expanded?expandedTasks.add(t.key):expandedTasks.delete(t.key);scheduleTasksRender();return}else if(e.target.closest('[data-action="edit"]')){type=t.type||'person';apiPlatform.value=t.platform||'grsai';updatePlatformUI();selectedCustomTemplateKey='';renderFields(t.values||{},t.fieldNames||{});$('#model').value=t.model;$('#size').value=t.size;$('#ratio').value=t.ratio;if(quantity)quantity.value=String(t.quantity||1);hint.textContent='已恢复该任务模板'}else if(e.target.closest('[data-action="again"]'))submit(t.values,{fieldNames:t.fieldNames||{},refs:t.refs,platform:t.platform||'grsai',model:t.model,size:t.size,ratio:t.ratio,type:t.type||'person',quantity:1});else if(e.target.closest('[data-action="sync"]')){if(taskOutputs(t)){t.outputs.filter(output=>output.id&&!['succeeded','failed','violation'].includes(output.status)).forEach(output=>{updateOutput(t.key,output.key,{status:'running',error:''});pollOutput(t.key,output.key,true)})}else{updateTask(t.key,{status:'running',error:''});pollTask(t.key,true)}}else if(e.target.closest('[data-action="delete"]'))deleteTask(t.key)}
 list.onclick=handleTaskListClick;
 assetGrid.onclick=e=>{const card=e.target.closest('.asset-card'),asset=findAsset(card?.dataset.assetKey);if(e.target.closest('[data-asset-action="inspiration"]')){if(asset)addAssetToInspiration(asset);return}const button=e.target.closest('[data-image]');if(!button)return;const url=button.dataset.image,caption=button.dataset.caption||'生成图片';if(e.target.closest('[data-asset-action="view"]')||e.target.closest('.asset-thumb'))openLightbox(url,caption);else if(e.target.closest('[data-asset-action="save"]')){if(asset)saveAssetToServer(asset);else setAssetFeedback('找不到这张资产图片，请刷新页面后重试。','fail')}};
@@ -1618,16 +1574,21 @@ const DRAFT_KEY = 'aiWorkbenchWorkspaceDraftV2';
   const writeDraft = () => {
       try {
         const values = typeof readValues === 'function' ? readValues() : {};
-        localStorage.setItem(DRAFT_KEY, JSON.stringify({
+        const draft = {
           type, values, refs: Array.isArray(refs) ? refs.filter(Boolean) : [],
           platform: apiPlatform?.value, model: $('#model')?.value,
           size: $('#size')?.value, ratio: $('#ratio')?.value,
           quantity: quantity?.value, fieldNames: currentFieldNames, selectedCustomTemplateKey, customTemplates,
-          editableDefaults, updatedAt: Date.now()
-        }));
+          editableDefaults
+        };
+        const previous = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
+        if (previous) {delete previous.updatedAt;if(JSON.stringify(previous)===JSON.stringify(draft))return;}
+        localStorage.setItem(DRAFT_KEY, JSON.stringify({...draft,updatedAt:Date.now()}));
       } catch {}
   };
-  const saveDraft = () => {
+  window.workbenchState?.registerFlusher(()=>{clearTimeout(draftTimer);writeDraft()});
+  const saveDraft = event => {
+    if (event?.target?.closest?.('.workbench-select-popup')) return;
     clearTimeout(draftTimer);
     draftTimer = setTimeout(writeDraft, 150);
   };
@@ -1686,6 +1647,8 @@ const DRAFT_KEY = 'aiWorkbenchWorkspaceDraftV2';
   next();
 })();
 </script>
+<link rel="stylesheet" href="workbench-select.css">
+<script src="workbench-select.js"></script>
 </html>
 
 

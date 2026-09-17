@@ -31,14 +31,24 @@ function sanitizeWorkbenchState(value) {
     if (total > 50 * 1024 * 1024) throw new Error('工作台状态超过 50MB，请减少缓存图片后重试');
     output[String(key).slice(0, 160)] = text;
   }
-  return { version: 1, updatedAt: Number(source.updatedAt) || Date.now(), storage: output };
+  return { version: source.version === 2 ? 2 : 1, updatedAt: Number(source.updatedAt) || Date.now(), storage: output };
+}
+
+let stateWriteQueue = Promise.resolve();
+async function readWorkbenchState() {
+  try { return sanitizeWorkbenchState(JSON.parse(await fs.promises.readFile(WORKBENCH_STATE_FILE, 'utf8'))); }
+  catch (error) {
+    try { return sanitizeWorkbenchState(JSON.parse(await fs.promises.readFile(`${WORKBENCH_STATE_FILE}.bak`, 'utf8'))); }
+    catch (backupError) { if (error.code === 'ENOENT' && backupError.code === 'ENOENT') return null; throw error.code === 'ENOENT' ? backupError : error; }
+  }
 }
 
 async function handleWorkbenchState(req, res) {
   try {
     if (req.method === 'GET') {
       try {
-        const state = sanitizeWorkbenchState(JSON.parse(await fs.promises.readFile(WORKBENCH_STATE_FILE, 'utf8')));
+        await stateWriteQueue.catch(() => {});
+        const state = await readWorkbenchState();
         return sendJson(res, 200, { ok: true, state });
       } catch (error) {
         if (error?.code === 'ENOENT') return sendJson(res, 200, { ok: true, state: null });
@@ -47,10 +57,24 @@ async function handleWorkbenchState(req, res) {
     }
     if (req.method !== 'PUT') return sendJson(res, 405, { ok: false, error: '仅支持 GET 或 PUT' });
     const state = sanitizeWorkbenchState(JSON.parse(await readBody(req))?.state);
-    await fs.promises.mkdir(SETTINGS_DIR, { recursive: true });
-    const temporary = `${WORKBENCH_STATE_FILE}.${process.pid}.tmp`;
-    await fs.promises.writeFile(temporary, `${JSON.stringify(state)}\n`, 'utf8');
-    await fs.promises.rename(temporary, WORKBENCH_STATE_FILE);
+    // Serialize writers: overlapping requests previously used the same temp file.
+    const write = stateWriteQueue.catch(() => {}).then(async () => {
+      const previous = await readWorkbenchState();
+      if (previous && previous.updatedAt > state.updatedAt) throw new Error('检测到更新的历史记录，请重新打开工作台后再试');
+      await fs.promises.mkdir(SETTINGS_DIR, { recursive: true });
+      const temporary = `${WORKBENCH_STATE_FILE}.${process.pid}.tmp`;
+      const file = await fs.promises.open(temporary, 'w');
+      try { await file.writeFile(`${JSON.stringify(state)}\n`, 'utf8'); await file.sync(); }
+      finally { await file.close(); }
+      if (previous) {
+        const backup = `${WORKBENCH_STATE_FILE}.bak.tmp`;
+        await fs.promises.writeFile(backup, `${JSON.stringify(previous)}\n`, 'utf8');
+        await fs.promises.rename(backup, `${WORKBENCH_STATE_FILE}.bak`);
+      }
+      await fs.promises.rename(temporary, WORKBENCH_STATE_FILE);
+    });
+    stateWriteQueue = write;
+    await write;
     sendJson(res, 200, { ok: true, updatedAt: state.updatedAt });
   } catch (error) {
     sendJson(res, 500, { ok: false, error: `工作台状态读写失败: ${error.message || error}` });

@@ -1,16 +1,19 @@
 {
   "name": "xie-mengxiong-workbench",
-  "version": "1.0.16",
+  "version": "1.0.17",
   "description": "谢梦雄创作台",
   "main": "electron-main.js",
   "private": true,
   "scripts": {
+    "test:history": "node tests/history.cjs",
+    "test:dropdowns": "node tests/dropdowns.cjs",
     "start": "electron .",
     "dist": "electron-builder --win nsis"
   },
   "devDependencies": {
     "electron": "37.2.6",
     "electron-builder": "^26.0.12",
+    "playwright": "^1.63.0",
     "vite": "^6.4.3"
   },
   "build": {
@@ -22,6 +25,9 @@
       "server.js",
       "index.html",
       "canvas-flow.bundle.js",
+      "workbench-select.js",
+      "workbench-state.js",
+      "workbench-select.css",
       "xie-mengxiong-workbench.css",
       "generated/**/*"
     ],
