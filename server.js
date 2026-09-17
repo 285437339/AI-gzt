@@ -2,6 +2,7 @@ const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
+const sharp = require('sharp');
 
 const PORT = Number(process.env.AI_WORKBENCH_PORT || 4173);
 const UPSTREAM_HOST = process.env.GRSAI_API_HOST || 'grsai.dakka.com.cn';
@@ -16,6 +17,7 @@ const WORKBENCH_SETTINGS_FILE = path.join(SETTINGS_DIR, 'workbench-settings.json
 const WORKBENCH_STATE_FILE = path.join(SETTINGS_DIR, 'workbench-state.json');
 const INSPIRATION_DIR = path.join(SETTINGS_DIR, 'inspirations');
 const DEFAULT_MEDIA_CACHE_DIR = path.join(SETTINGS_DIR, 'media-cache');
+const GENERATED_MEDIA_DIR = path.join(SETTINGS_DIR, 'generated-images');
 
 function sanitizeWorkbenchState(value) {
   const source = value && typeof value === 'object' ? value : {};
@@ -118,6 +120,11 @@ function cacheDirectoryFromSettings(settings) {
   return requested ? path.resolve(requested) : DEFAULT_MEDIA_CACHE_DIR;
 }
 
+async function ensureMediaCacheDirectory() {
+  await fs.promises.mkdir(path.join(DEFAULT_MEDIA_CACHE_DIR, 'assets'), { recursive: true });
+  await fs.promises.mkdir(path.join(DEFAULT_MEDIA_CACHE_DIR, 'references'), { recursive: true });
+}
+
 function safeCacheFile(root, relative) {
   const target = path.resolve(root, relative);
   if (target !== root && !target.startsWith(`${root}${path.sep}`)) throw new Error('缓存路径无效');
@@ -134,18 +141,41 @@ async function storeCacheMedia(req, res) {
     const kind = data.kind === 'assets' ? 'assets' : 'references';
     await fs.promises.mkdir(path.join(root, kind), { recursive: true });
     const urls = [];
+    const originalUrls = [];
     for (let index = 0; index < sources.length; index += 1) {
       const source = sources[index];
       const dataMatch = source.match(/^data:image\/(png|jpeg|jpg|webp);base64,/i);
-      const extension = (dataMatch?.[1] || 'png').toLowerCase().replace('jpeg', 'jpg');
+      const extension = kind === 'assets' ? 'webp' : (dataMatch?.[1] || 'png').toLowerCase().replace('jpeg', 'jpg');
       const filename = `${kind}-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}.${extension}`;
-      await downloadToFile(source, safeCacheFile(root, path.join(kind, filename)));
+      const target = safeCacheFile(root, path.join(kind, filename));
+      if (kind === 'assets') {
+        const temporary = `${target}.source`;
+        try {
+          await downloadToFile(source, temporary);
+          await sharp(temporary).resize({ width: 320, height: 320, fit: 'inside', withoutEnlargement: true }).webp({ quality: 72 }).toFile(target);
+          if (data.preserveOriginal === true) {
+            await fs.promises.mkdir(GENERATED_MEDIA_DIR, { recursive: true });
+            const metadata = await sharp(temporary).metadata();
+            const originalName = filename.replace(/\.webp$/, '.' + (metadata.format === 'jpeg' ? 'jpg' : metadata.format || 'png'));
+            await fs.promises.copyFile(temporary, safeCacheFile(GENERATED_MEDIA_DIR, originalName));
+            originalUrls.push('/generated-media/' + encodeURIComponent(originalName));
+          }
+        } finally {
+          await fs.promises.rm(temporary, { force: true }).catch(() => {});
+        }
+      } else {
+        await downloadToFile(source, target);
+      }
       urls.push(`/cache-media/${encodeURIComponent(kind)}/${encodeURIComponent(filename)}`);
     }
-    sendJson(res, 200, { ok: true, urls, directory: root });
+    sendJson(res, 200, { ok: true, urls, originalUrls, directory: root });
   } catch (error) {
     sendJson(res, 500, { error: `缓存图片失败: ${error.message || error}` });
   }
+}
+
+async function handleVersion(req, res) {
+  sendJson(res, 200, { ok: true, version: require('./package.json').version });
 }
 
 async function serveCacheMedia(req, res) {
@@ -330,6 +360,7 @@ async function uploadRunningHubImage(req, res) {
 }
 
 function downloadToFile(source, target, redirects = 0) {
+  if (/^\/(cache-media|generated-media)\//.test(source)) source = `http://127.0.0.1:${PORT}${source}`;
   return new Promise((resolve, reject) => {
     if (source.startsWith('data:image/')) {
       const match = source.match(/^data:image\/[^;]+;base64,(.+)$/s);
@@ -484,6 +515,24 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (req.method === 'GET' && req.url.startsWith('/generated-media/')) {
+    try {
+      const filename = decodeURIComponent(req.url.split('?')[0].slice('/generated-media/'.length));
+      const target = safeCacheFile(GENERATED_MEDIA_DIR, filename);
+      fs.readFile(target, (error, body) => {
+        if (error) return sendJson(res, 404, {error:'原图文件不存在'});
+        const ext=path.extname(target).toLowerCase();
+        res.writeHead(200, {'Content-Type': ext === '.webp' ? 'image/webp' : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : 'image/png', 'Cache-Control':'public, max-age=31536000, immutable'});
+        res.end(body);
+      });
+    } catch { sendJson(res, 400, {error:'图片路径无效'}); }
+    return;
+  }
+  if (req.method === 'GET' && req.url === '/api/version') {
+    handleVersion(req, res);
+    return;
+  }
+
   if (req.method === 'POST' && req.url === '/api/check-save-dir') {
     checkSaveDirectory(req, res);
     return;
@@ -581,4 +630,7 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(PORT, () => console.log(`AI workbench: http://localhost:${PORT}`));
+server.listen(PORT, () => {
+  ensureMediaCacheDirectory().catch(error => console.warn(`创建媒体缓存目录失败: ${error.message || error}`));
+  console.log(`AI workbench: http://localhost:${PORT}`);
+});
