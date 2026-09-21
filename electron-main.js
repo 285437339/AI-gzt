@@ -63,7 +63,7 @@ async function createWindow() {
     minHeight: 680,
     backgroundColor: '#101114',
     title: '谢梦雄创作台',
-    webPreferences: { contextIsolation: true, nodeIntegration: false }
+    webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(ROOT, 'preload.js') }
   });
   let closeAllowed = false, savingBeforeClose = false;
   const flushBeforeClose = async () => {
