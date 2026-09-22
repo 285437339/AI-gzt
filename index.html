@@ -1831,6 +1831,8 @@ const DRAFT_KEY = 'aiWorkbenchWorkspaceDraftV2';
 
   const readVideoTasks = () => { try { const saved = JSON.parse(localStorage.getItem(VIDEO_TASKS_KEY) || '[]'); if (Array.isArray(saved)) return saved.filter(item => item && typeof item === 'object'); } catch (_) {} return []; };
   let videoTasks = readVideoTasks();
+  // Prompt expansion is per-card view state, mirroring the image board expandedTasks set.
+  const videoExpandedTasks = new Set();
   const saveVideoTasks = () => { try { localStorage.setItem(VIDEO_TASKS_KEY, JSON.stringify(videoTasks.slice(0, 60))); } catch (_) {} };
   const readVideoRefs = () => { let saved = []; try { const parsed = JSON.parse(localStorage.getItem(VIDEO_REFS_KEY) || '[]'); if (Array.isArray(parsed)) saved = parsed; } catch (_) {} return Array.from({ length: MAX_REFS }, (_, i) => typeof saved[i] === 'string' ? saved[i] : ''); };
   let videoRefs = readVideoRefs();
@@ -1959,15 +1961,18 @@ const DRAFT_KEY = 'aiWorkbenchWorkspaceDraftV2';
   function outputVideoName(task, index) {
     return `video-${String(task.model || 'generated').replace(/[^a-z0-9_-]+/gi, '_')}-${String(task.key || '').slice(0, 8)}-${new Date().toISOString().replace(/[:.]/g, '-')}-${index + 1}.mp4`;
   }
-  const videoTaskSignature = task => [task.status, task.url, task.savedPath, task.saveWarning, task.error, task.id, task.model, task.ratio, task.resolution, task.duration, task.platform, task.progress ? 'p' : ''].join('\u0001');
+  const videoTaskSignature = task => [task.status, task.url, task.savedPath, task.saveWarning, task.error, task.id, task.model, task.ratio, task.resolution, task.duration, task.platform, task.progress ? 'p' : '', (Array.isArray(task.refs) ? task.refs.filter(Boolean).length : 0)].join('\u0001');
   function videoTaskCardHtml(task) {
     const done = task.status === 'succeeded', failed = task.status === 'failed';
     const statusText = done ? '已完成' : failed ? '失败' : '生成中';
     const statusKind = done ? 'done' : failed ? 'fail' : '';
+    const promptExpanded = videoExpandedTasks.has(task.key);
     const media = task.url ? `<div class="result"><video src="${vEsc(task.url)}" controls preload="metadata"></video></div>` : '';
+    // Reference images are kept on the card as thumbnails, exactly like the image board head.
+    const refs = Array.isArray(task.refs) ? task.refs.filter(url => typeof url === 'string' && url.trim()).slice(0, MAX_REFS) : [];
     const progress = !done && !failed && task.progress ? `<div class="progress progress-pct">进度 ${Number(task.progress) || 0}%</div>` : '';
     const saved = task.savedPath ? `<div class="progress">已保存：${vEsc(task.savedPath)}</div>` : '';
-    return `<div class="task-head"><div class="task-ref"></div><div class="prompt open">${vEsc(task.prompt)}</div><span class="status ${statusKind}">${statusText}</span></div><div class="meta">${vEsc(task.model)} · ${vEsc(task.ratio)} · ${vEsc(task.resolution)} · ${Number(task.duration) || 0} 秒 · ${vIsRh(task.platform) ? 'RunningHub' : 'Grsai'}</div>${task.id ? `<div class="task-id">${vEsc(task.id)}</div>` : ''}${progress}${media}${saved}${task.error ? `<div class="error">${vEsc(task.error)}</div>` : ''}<div class="actions">${task.url ? '<button type="button" data-video-action="open">打开视频</button><button type="button" data-video-action="save">保存到本地</button>' : ''}<button type="button" data-video-action="load" title="恢复该视频任务提交时的模型、比例、分辨率、时长、参考图与音频">⇪ 载入工作流</button><button type="button" data-video-action="delete">删除</button></div>`;
+    return `<div class="task-head"><div class="task-ref">${refs.map((url, index) => `<img src="${vEsc(url)}" loading="lazy" alt="参考图${index + 1}">`).join('')}</div><div><div class="prompt${promptExpanded ? ' open' : ''}">${vEsc(task.prompt)}</div><button class="expand" type="button" data-video-action="expand">${promptExpanded ? '收起' : '展开'}</button></div><span class="status ${statusKind}">${statusText}</span></div><div class="meta">${vEsc(task.model)} · ${vEsc(task.ratio)} · ${vEsc(task.resolution)} · ${Number(task.duration) || 0} 秒 · ${vIsRh(task.platform) ? 'RunningHub' : 'Grsai'}</div>${task.id ? `<div class="task-id">${vEsc(task.id)}</div>` : ''}${progress}${media}${saved}${task.error ? `<div class="error">${vEsc(task.error)}</div>` : ''}<div class="actions">${task.url ? '<button type="button" data-video-action="open">打开视频</button><button type="button" data-video-action="save">保存到本地</button>' : ''}<button type="button" data-video-action="load" title="恢复该视频任务提交时的模型、比例、分辨率、时长、参考图与音频">⇪ 载入工作流</button><button type="button" data-video-action="delete">删除</button></div>`;
   }
   // Reuse the existing card nodes: rebuilding the list on every poll recreated the <video>
   // element and made the finished video flash. Only the progress label is patched now.
@@ -2112,7 +2117,14 @@ const DRAFT_KEY = 'aiWorkbenchWorkspaceDraftV2';
     const card = event.target.closest('[data-video-key]'); if (!card) return;
     const task = videoTasks.find(item => item.key === card.dataset.videoKey); if (!task) return;
     const action = event.target.closest('[data-video-action]')?.dataset.videoAction;
-    if (action === 'open') { if (task.url) window.open(task.url, '_blank'); }
+    if (action === 'expand') {
+      const wasExpanded = videoExpandedTasks.has(task.key);
+      if (wasExpanded) videoExpandedTasks.delete(task.key); else videoExpandedTasks.add(task.key);
+      const promptNode = card.querySelector('.prompt'), expandNode = card.querySelector('.expand');
+      if (promptNode) promptNode.classList.toggle('open', !wasExpanded);
+      if (expandNode) expandNode.textContent = wasExpanded ? '展开' : '收起';
+    }
+    else if (action === 'open') { if (task.url) window.open(task.url, '_blank'); }
     else if (action === 'load') { openVideoWorkflowInNewWorkspace(task); }
     else if (action === 'save') { if (!task.url) return; try { await saveVideoTask(task); saveVideoTasks(); renderVideoTasks(); setVideoStatus('视频已保存。', 'ok'); } catch (error) { setVideoStatus(`保存失败：${error.message || error}`, 'fail'); } }
     else if (action === 'delete') { videoTasks = videoTasks.filter(item => item.key !== task.key); saveVideoTasks(); renderVideoTasks(); }

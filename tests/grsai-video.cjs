@@ -110,7 +110,7 @@ const waitFor = async (page, list, minimum = 1, timeout = 30000) => {
     assert.match(grsaiResults[0], /^http:\/\/(?:localhost|127\.0\.0\.1):\d+\/v1\/api\/result\?id=grs-video-1$/, '结果查询必须走本地代理');
     await page.waitForSelector('#videoList video');
     assert.equal(await page.locator('#videoList video').first().getAttribute('src'), GRSAI_MP4);
-    assert.equal(await page.locator('#videoList img').count(), 0);
+    assert.equal(await page.locator('#videoList .result img').count(), 0, '结果区必须是 <video>，不能退化成 <img>');
     assert.equal((await page.locator('#videoList .status').first().innerText()).trim(), '已完成');
 
     // 5) 1080p 时长钳制：15 秒必须落到 10 秒。
@@ -180,6 +180,57 @@ const waitFor = async (page, list, minimum = 1, timeout = 30000) => {
     // 9) 启动视图设置里出现视频生成。
     assert.equal(await page.locator('#settingsStartupView option[value="video"]').count(), 1);
 
+    // 10) 视频任务卡片提示词：默认折叠三行 + 展开/收起按钮，与图片生成任务卡一致；
+    //     卡片按签名重建 innerHTML（保存后 savedPath 变化）时，展开状态必须保留。
+    let saveCalls = 0;
+    await page.route('**/api/save-image', async route => { saveCalls += 1; await route.fulfill({ json: { path: `C:/video-test/save-${saveCalls}.mp4` } }); });
+    await page.evaluate(() => {
+      const platform = document.querySelector('#videoPlatform');
+      platform.value = 'grsai'; platform.dispatchEvent(new Event('change', { bubbles: true }));
+      saveDir.value = 'C:/video-test'; localStorage.setItem('aiWorkbenchSaveDir', 'C:/video-test');
+    });
+    const longPrompt = Array.from({ length: 8 }, (_, index) => `第 ${index + 1} 行长提示词：镜头缓慢推进，雨滴落在霓虹招牌上`).join('\n');
+    await page.locator('#videoPrompt').fill(longPrompt);
+    const createsBeforeExpand = grsaiCreates.length;
+    await page.locator('#videoSubmit').click();
+    await waitFor(page, grsaiCreates, createsBeforeExpand + 1);
+    assert.equal(grsaiCreates[createsBeforeExpand].prompt, longPrompt, '多行长提示词必须原样提交');
+    await waitFor(page, grsaiResults, 3);
+    await page.waitForSelector('#videoList [data-video-key]:first-child video');
+    const expandCard = page.locator('#videoList [data-video-key]').first();
+    assert.equal(await expandCard.locator('.prompt').evaluate(node => node.classList.contains('open')), false, '视频提示词默认应为折叠状态');
+    assert.equal((await expandCard.locator('.expand').innerText()).trim(), '展开');
+    assert.ok(await expandCard.locator('.prompt').evaluate(node => node.scrollHeight > node.clientHeight + 1), '超过三行的提示词必须被折叠截断');
+    await expandCard.locator('.expand').click();
+    assert.equal(await expandCard.locator('.prompt').evaluate(node => node.classList.contains('open')), true);
+    assert.equal((await expandCard.locator('.expand').innerText()).trim(), '收起');
+    assert.ok(await expandCard.locator('.prompt').evaluate(node => node.scrollHeight <= node.clientHeight + 1), '展开后必须完整显示提示词');
+    await expandCard.locator('.expand').click();
+    assert.equal(await expandCard.locator('.prompt').evaluate(node => node.classList.contains('open')), false, '再次点击应收起');
+    await expandCard.locator('.expand').click();
+    await expandCard.locator('[data-video-action="save"]').click();
+    await page.waitForFunction(() => /save-2\.mp4/.test(document.querySelector('#videoList [data-video-key] .progress')?.textContent || ''));
+    assert.equal(await expandCard.locator('.prompt').evaluate(node => node.classList.contains('open')), true, '卡片重绘后展开状态必须保留');
+    assert.equal((await expandCard.locator('.expand').innerText()).trim(), '收起');
+    assert.equal(await expandCard.locator('.prompt').evaluate(node => node.textContent), longPrompt, '重绘后提示词内容不得丢失');
+
+
+    // 11) 参考图缩略图：与图片生成任务卡一致，参考图保留在卡片左上角；没有参考图时不显示。
+    const thumbCard = page.locator('#videoList [data-video-key]').first();
+    assert.equal(await thumbCard.locator('.task-ref img').count(), 1, '带参考图的视频任务应显示一张缩略图');
+    assert.match(await thumbCard.locator('.task-ref img').first().getAttribute('src'), /^data:image\//, '缩略图应直接使用任务里的参考图');
+    await page.locator('#videoSlots .slot-delete').first().click();
+    await page.waitForFunction(() => !document.querySelector('#videoSlots .slot img'));
+    await page.locator('#videoPrompt').fill('无参考图的视频任务');
+    const beforeNoRef = grsaiCreates.length;
+    await page.locator('#videoSubmit').click();
+    await waitFor(page, grsaiCreates, beforeNoRef + 1);
+    assert.ok(!grsaiCreates[beforeNoRef].images?.length, '清空参考图后不应再带上 images');
+    await waitFor(page, grsaiResults, 4);
+    await page.waitForFunction(() => document.querySelector('#videoList [data-video-key] .prompt')?.textContent === '无参考图的视频任务');
+    const noRefCard = page.locator('#videoList [data-video-key]').first();
+    assert.equal(await noRefCard.locator('.task-ref img').count(), 0, '没有参考图的任务不应显示缩略图');
+    assert.equal(await page.locator('#videoList [data-video-key]').nth(1).locator('.task-ref img').count(), 1, '其他任务的缩略图不应受影响');
     assert.deepEqual(errors, []);
     console.log('PASS: 视频生成模块（Grsai minimax-h3 单模型 + RunningHub 7 个视频模型，参考图 data URL / 上传首帧、1080p 时长钳制、轮询出 <video>）。All upstream calls mocked; no paid calls.');
   } finally { await app.close(); }
