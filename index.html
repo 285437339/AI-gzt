@@ -220,6 +220,7 @@ html[data-skin="dark"] .canvas-toolbar button,html[data-skin="dark"] .canvas-too
       </div>
     </section>
     <section class="workspace" id="reverseView" hidden><h1 class="title" id="reverseViewTitle">提示词反推</h1><div class="sub" id="reverseViewSub">上传或复用参考图片，由视觉模型整理为可直接用于生图的完整提示词。</div>
+      <div class="generation-workspace-tabs" id="reverseWorkspaceTabs" role="tablist" aria-label="提示词反推工作区"></div>
       <div class="reverse-layout">
         <section class="reverse-output"><div class="reverse-head"><h2>反推提示词</h2><button class="reverse-copy" id="reverseCopy" type="button" disabled>复制</button></div><pre class="reverse-result empty" id="reverseResult">上传至少一张参考图，然后点击“开始反推”</pre></section>
         <section class="reverse-controls"><h2>图片分析设置</h2><div class="reverse-model"><label for="reverseModel">推理模型</label><select id="reverseModel"></select></div><div class="ref"><h4>参考图片：点击、拖入，或将鼠标移到图位后按 Ctrl+V 粘贴</h4><input id="reverseFile" type="file" accept="image/*" hidden><div class="slots reverse-slots" id="reverseSlots"></div></div><div class="reverse-instruction"><div class="reverse-instruction-head"><label for="reverseInstruction">补充要求（可选）</label></div><div class="template-manager reverse-template-manager"><select id="reverseTemplateSelect" aria-label="反推模板"></select><div class="template-actions"><button id="addReverseTemplate" type="button">添加模板</button><button id="saveReverseTemplate" type="button">保存模板</button><button id="deleteReverseTemplate" type="button" data-template-delete>删除模板</button></div></div><textarea id="reverseInstruction" placeholder="例如：重点描述产品材质、镜头参数和自然光影，不要添加图片中不存在的内容。"></textarea></div><button class="submit" id="reverseSubmit" type="button">开始反推</button><div class="reverse-status" id="reverseStatus" role="status" aria-live="polite"></div></section>
@@ -708,7 +709,7 @@ const restoreTaskReferences=(task,message='已恢复参考图。')=>{if(!task||!
 function workbenchDropImageUrl(url){if(!url)return null;const target=String(url).trim();if(!target)return null;const pool=tasks.filter(t=>t&&t.key);for(const item of pool){if(item.image===target||item.sourceImage===target)return item;const outputs=Array.isArray(item.outputs)?item.outputs:[];if(outputs.some(output=>output&&(output.image===target||output.sourceImage===target)))return item}const asset=assets.find(a=>a&&(a.url===target||a.sourceUrl===target||a.thumbnailUrl===target));if(asset&&asset.taskKey){const owner=pool.find(t=>t.key===String(asset.taskKey).split(':')[0]);if(owner)return owner}return null}
 function workbenchDropImageFile(file){const name=String((file&&file.name)||'').toLowerCase();if(!name)return null;const pool=tasks.filter(t=>t&&t.key);const byKey=pool.find(t=>name.includes(String(t.key).toLowerCase().slice(0,8)));if(byKey)return byKey;const byPath=pool.find(t=>String(t.savedPath||'').toLowerCase().split(/[\\/]/).pop()===name);if(byPath)return byPath;const byOutput=pool.find(t=>(Array.isArray(t.outputs)?t.outputs:[]).some(output=>String((output&&output.image)||'').toLowerCase().split(/[\\/]/).pop()===name));return byOutput||null}
 function workbenchDropPayload(event){const dt=event.dataTransfer;if(!dt)return{files:[],urls:[]};const files=[...(dt.files||[])];const urls=[];try{urls.push(...String(dt.getData('text/uri-list')||'').split('\n').map(item=>item.trim()).filter(item=>item&&item.charAt(0)!=='#'))}catch{}try{const plain=String(dt.getData('text/plain')||'').trim();if(plain.startsWith('data:')||plain.startsWith('http')||plain.startsWith('file:'))urls.push(plain)}catch{}return{files,urls}}
-function workbenchDropBlocked(target){if(!target||typeof target.closest!=='function')return false;return Boolean(target.closest('.slots')||target.closest('#canvasView')||target.closest('.canvas-shell')||target.closest('.canvas-node'))}
+function workbenchDropBlocked(target){if(!target||typeof target.closest!=='function')return false;return Boolean(target.closest('.slots')||target.closest('#canvasView')||target.closest('.canvas-shell')||target.closest('.canvas-node')||target.closest('#chatComposer'))}
 function workflowWorkspaceName(task){const raw=(task&&(task.createdAt||task.submittedAt))||0;let time=typeof raw==="number"?raw:(/^\d+$/.test(String(raw))?Number(raw):Date.parse(raw));if(!Number.isFinite(time)||time<=0)time=Date.now();const date=new Date(time);const pad=value=>String(value).padStart(2,"0");return "工作流 " + pad(date.getMonth()+1) + "-" + pad(date.getDate()) + " " + pad(date.getHours()) + ":" + pad(date.getMinutes())}
 function notifyWorkspaceDraft(){try{const fields=document.getElementById("fields");if(fields)fields.dispatchEvent(new Event("input",{bubbles:true}))}catch{}}
 function openImageWorkflowInNewWorkspace(task){const tabs=window.__imageWorkspaceTabs;if(!tabs||typeof tabs.addWorkspace!=="function"){loadTaskWorkflow(task);return true}try{tabs.addWorkspace(workflowWorkspaceName(task))}catch(error){console.warn("新建图片工作区失败，改为载入当前工作区:",(error&&error.message)||error);loadTaskWorkflow(task);return true}loadTaskWorkflow(task);try{if(typeof tabs.sync==="function")tabs.sync()}catch{}notifyWorkspaceDraft();return true}
@@ -1519,7 +1520,7 @@ canvasNodes.addEventListener('input',event=>{const input=event.target.closest('[
   const activeChat = () => chatSessions.find(item => item.id === activeChatId) || chatSessions[0];
   const chatView = document.createElement('section');
   chatView.id = 'chatView'; chatView.className = 'workspace chat-view'; chatView.hidden = true;
-  chatView.innerHTML = `<div class="chat-layout"><aside class="chat-sidebar"><button type="button" class="chat-new" id="chatNew">＋ 新建对话</button><div class="chat-session-list" id="chatSessionList"></div></aside><main class="chat-main"><header class="chat-head"><div><h1 class="title">聊天</h1><div class="sub">连续对话会自动保留上下文和历史记录。</div></div><div class="chat-models"><select id="chatPlatform" aria-label="聊天平台"><option value="grsai">Grsai</option><option value="runninghub">RunningHub 国内</option><option value="runninghub-global">RunningHub 海外</option></select><select id="chatModel" aria-label="聊天模型"></select><button type="button" id="chatClear">清空当前对话</button></div></header><div class="chat-messages" id="chatMessages" aria-live="polite"></div><form class="chat-composer" id="chatComposer"><textarea id="chatInput" rows="3" placeholder="输入消息，Enter 发送，Shift + Enter 换行"></textarea><button type="submit" class="chat-send" id="chatSend">发送</button></form><div class="chat-status" id="chatStatus" role="status"></div></main></div>`;
+  chatView.innerHTML = `<div class="chat-layout"><aside class="chat-sidebar"><button type="button" class="chat-new" id="chatNew">＋ 新建对话</button><div class="chat-session-list" id="chatSessionList"></div></aside><main class="chat-main"><header class="chat-head"><div><h1 class="title">聊天</h1><div class="sub">连续对话会自动保留上下文和历史记录。</div></div><div class="chat-models"><select id="chatPlatform" aria-label="聊天平台"><option value="grsai">Grsai</option><option value="runninghub">RunningHub 国内</option><option value="runninghub-global">RunningHub 海外</option></select><select id="chatModel" aria-label="聊天模型"></select><button type="button" id="chatClear">清空当前对话</button></div></header><div class="chat-messages" id="chatMessages" aria-live="polite"></div><form class="chat-composer" id="chatComposer"><div class="chat-attach-row" id="chatAttachRow" hidden><div class="chat-attach-list" id="chatAttachList"></div><span class="chat-attach-tip" id="chatAttachTip"></span></div><div class="chat-input-row"><button type="button" class="chat-attach" id="chatAttachButton" title="添加图片（也可直接拖入或 Ctrl+V 粘贴）">＋ 图片</button><input type="file" id="chatImageFile" accept="image/*" multiple hidden><textarea id="chatInput" rows="3" placeholder="输入消息，Enter 发送，Shift + Enter 换行；可添加图片一起发送"></textarea><button type="submit" class="chat-send" id="chatSend">发送</button></div></form><div class="chat-status" id="chatStatus" role="status"></div></main></div>`;
   document.querySelector('.main')?.append(chatView);
   const nav = document.querySelector('.nav');
   const chatNav = document.createElement('button');
@@ -1532,25 +1533,154 @@ canvasNodes.addEventListener('input',event=>{const input=event.target.closest('[
   const model = chatView.querySelector('#chatModel');
   const status = chatView.querySelector('#chatStatus');
   const send = chatView.querySelector('#chatSend');
+  const attachRow = chatView.querySelector('#chatAttachRow');
+  const attachList = chatView.querySelector('#chatAttachList');
+  const attachTip = chatView.querySelector('#chatAttachTip');
+  const attachButton = chatView.querySelector('#chatAttachButton');
+  const imageFile = chatView.querySelector('#chatImageFile');
+  const composer = chatView.querySelector('#chatComposer');
+  const MAX_CHAT_IMAGES = 4;
+  let pendingImages = [];
   const modelsFor = value => isRunninghubPlatform(value) ? RUNNINGHUB_LLM_MODELS.map(id=>[id,id]) : [['gemini-3.8-flash','gemini-3.8-flash'],['gpt-5.6-sol','gpt-5.6-sol'],['gpt-6-astra','gpt-6-astra']];
   function renderChatModels() { const chat = activeChat(); platform.value = chat.platform || 'grsai'; const entries = modelsFor(platform.value); if (!entries.some(([id]) => id === chat.model)) chat.model = entries[0][0]; model.innerHTML = entries.map(([id,label]) => `<option value="${id}">${label}</option>`).join(''); model.value = chat.model; }
-  function renderChats() { const chat = activeChat(); renderChatModels(); sessionList.innerHTML = chatSessions.slice().sort((a,b) => b.updatedAt-a.updatedAt).map(item => `<button type="button" class="chat-session ${item.id===chat.id?'active':''}" data-chat-id="${item.id}"><span>${escChat(item.title || '新对话')}</span><small>${new Date(item.updatedAt).toLocaleDateString()}</small></button>`).join(''); messages.innerHTML = chat.messages.length ? chat.messages.map(item => `<article class="chat-message ${item.role}"><div class="chat-role">${item.role==='user'?'你':'AI'}</div><div class="chat-bubble">${escChat(item.content).replace(/\n/g,'<br>')}</div></article>`).join('') : '<div class="chat-empty">开始一段新对话。内容会在此设备持续保存。</div>'; messages.scrollTop = messages.scrollHeight; }
-  function updateChatTitle(chat) { const first = chat.messages.find(item => item.role === 'user')?.content?.trim(); if (first) chat.title = first.replace(/\s+/g,' ').slice(0, 22); }
+  function renderChats() { const chat = activeChat(); renderChatModels(); sessionList.innerHTML = chatSessions.slice().sort((a,b) => b.updatedAt-a.updatedAt).map(item => `<button type="button" class="chat-session ${item.id===chat.id?'active':''}" data-chat-id="${item.id}"><span>${escChat(item.title || '新对话')}</span><small>${new Date(item.updatedAt).toLocaleDateString()}</small></button>`).join(''); messages.innerHTML = chat.messages.length ? chat.messages.map(chatMessageMarkup).join('') : '<div class="chat-empty">开始一段新对话。内容会在此设备持续保存。</div>'; messages.scrollTop = messages.scrollHeight; }
+  function chatMessageMarkup(item) {
+    const images = Array.isArray(item.images) ? item.images.filter(Boolean) : [];
+    const text = String(item.content ?? '');
+    const gallery = images.length ? `<div class="chat-bubble-images">${images.map((url, index) => `<img src="${escChat(url)}" alt="图片${index + 1}" loading="lazy">`).join('')}</div>` : '';
+    const bubble = text ? `<div class="chat-bubble">${escChat(text).replace(/\n/g, '<br>')}</div>` : (images.length ? '' : '<div class="chat-bubble">（空消息）</div>');
+    return `<article class="chat-message ${item.role}"><div class="chat-role">${item.role === 'user' ? '你' : 'AI'}</div>${gallery}${bubble}</article>`;
+  }
+  function updateChatTitle(chat) { const first = chat.messages.find(item => item.role === 'user'); const text = String(first?.content || '').trim(); if (text) chat.title = text.replace(/\s+/g,' ').slice(0, 22); else if (Array.isArray(first?.images) && first.images.length) chat.title = '图片对话'; }
   function setChatStatus(text, kind='') { status.textContent = text; status.className = `chat-status ${kind}`; }
-  function createChat() { const chat = {id:uid(),title:'新对话',model:modelsFor(platform.value)[0][0],platform:platform.value||'grsai',createdAt:Date.now(),updatedAt:Date.now(),messages:[]}; chatSessions.unshift(chat); activeChatId=chat.id; saveChats(); renderChats(); input.focus(); }
-  async function sendChat() { const content = input.value.trim(), chat = activeChat(); if (!content || send.disabled) return; const useRunninghub = isRunninghubPlatform(chat.platform); const key = useRunninghub ? runninghubKeyValue() : rawApiKey(); if (!key) { setChatStatus(`请先在图片生成的 API 设置中填写 ${useRunninghub?'RunningHub':'Grsai'} API Key。`, 'fail'); return; }
-    chat.messages.push({role:'user',content,createdAt:Date.now()}); updateChatTitle(chat); chat.updatedAt=Date.now(); input.value=''; saveChats(); renderChats(); send.disabled=true; send.textContent='发送中...'; setChatStatus(`正在调用 ${chat.model}...`,'busy');
-    try { const response = await fetchJson(useRunninghub?'/rh-llm/v1/chat/completions':'/v1/chat/completions',{method:'POST',headers:useRunninghub?runninghubHeaders(chat.platform):headers(),body:JSON.stringify({model:chat.model,stream:false,messages:chat.messages.map(({role,content})=>({role,content})),temperature:.7})},'聊天'); const answer = response?.choices?.[0]?.message?.content || response?.data?.choices?.[0]?.message?.content || ''; if (!answer) throw Error(nestedErrorMessage(response)||'模型没有返回内容'); chat.messages.push({role:'assistant',content:typeof answer==='string'?answer:JSON.stringify(answer),createdAt:Date.now()}); chat.updatedAt=Date.now(); saveChats(); renderChats(); setChatStatus(`已使用 ${chat.model} 回复。`,'ok'); }
-    catch (error) { setChatStatus(error?.message || String(error),'fail'); }
-    finally { send.disabled=false; send.textContent='发送'; }
+  function createChat() { const chat = {id:uid(),title:'新对话',model:modelsFor(platform.value)[0][0],platform:platform.value||'grsai',createdAt:Date.now(),updatedAt:Date.now(),messages:[]}; chatSessions.unshift(chat); activeChatId=chat.id; saveChats(); pendingImages=[]; renderPendingImages(); renderChats(); input.focus(); }
+  const readImageFile = file => new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result || '')); reader.onerror = () => reject(new Error('读取图片失败')); reader.readAsDataURL(file); });
+  function renderPendingImages() {
+    attachRow.hidden = pendingImages.length === 0;
+    attachList.innerHTML = pendingImages.map((url, index) => `<div class="chat-attach-item"><img src="${escChat(url)}" alt="待发送图片${index + 1}"><button type="button" class="chat-attach-remove" data-chat-attach-remove="${index}" title="移除">×</button></div>`).join('');
+    attachTip.textContent = `${pendingImages.length}/${MAX_CHAT_IMAGES}`;
+  }
+  async function addChatImages(fileList) {
+    const files = [...(fileList || [])].filter(file => file && /^image\//.test(file.type || ''));
+    if (!files.length) { setChatStatus('只能添加图片文件。', 'fail'); return; }
+    const room = MAX_CHAT_IMAGES - pendingImages.length;
+    if (room <= 0) { setChatStatus(`最多只能添加 ${MAX_CHAT_IMAGES} 张图片。`, 'fail'); return; }
+    const accepted = files.slice(0, room);
+    const overflow = files.length > room;
+    attachButton.disabled = true;
+    try {
+      for (const file of accepted) {
+        const dataUrl = await readImageFile(file);
+        const url = await cacheReferenceDataUrl(dataUrl);
+        if (url) pendingImages.push(url);
+        renderPendingImages();
+      }
+      setChatStatus(overflow ? `最多只能添加 ${MAX_CHAT_IMAGES} 张图片，已保留前 ${room} 张。` : `已添加 ${accepted.length} 张图片，发送时会一起提交。`, overflow ? 'fail' : 'ok');
+    } catch (error) {
+      setChatStatus(error?.message || String(error), 'fail');
+    } finally {
+      attachButton.disabled = false;
+      renderPendingImages();
+    }
+  }
+  const chatAnswerOf = response => {
+    const content = response?.choices?.[0]?.message?.content ?? response?.data?.choices?.[0]?.message?.content;
+    if (typeof content === 'string') return content.trim();
+    if (Array.isArray(content)) return content.map(part => typeof part === 'string' ? part : (part?.text || '')).join('').trim();
+    return '';
+  };
+  async function prepareChatHistory(chat) {
+    const recent = chat.messages.slice(-12);
+    while (recent.length && recent[0].role !== 'user') recent.shift();
+    const prepared = [];
+    for (const item of recent) {
+      const hasImages = Array.isArray(item.images) && item.images.length > 0;
+      prepared.push({ role: item.role, content: String(item.content || ''), images: hasImages ? await Promise.all(item.images.map(url => prepareImageForApi(url, 1280, .8))) : [] });
+    }
+    return prepared;
+  }
+  async function requestChatAnswer(chat) {
+    const history = await prepareChatHistory(chat);
+    const hasImages = history.some(item => item.images.length);
+    const useRunninghub = isRunninghubPlatform(chat.platform);
+    if (!hasImages) {
+      const response = await fetchJson(useRunninghub ? '/rh-llm/v1/chat/completions' : '/v1/chat/completions', { method: 'POST', headers: useRunninghub ? runninghubHeaders(chat.platform) : headers(), body: JSON.stringify({ model: chat.model, stream: false, messages: history.map(({ role, content }) => ({ role, content })), temperature: .7 }) }, '聊天');
+      return { response, answer: chatAnswerOf(response) };
+    }
+    if (useRunninghub) {
+      const flat = history.flatMap(item => item.images);
+      const uploaded = await uploadRunninghubReferences({ refs: flat, platform: chat.platform }, setChatStatus);
+      let cursor = 0;
+      const mapped = history.map(item => {
+        if (!item.images.length) return { role: item.role, content: item.content || '' };
+        const urls = item.images.map(() => uploaded[cursor++]);
+        const content = [{ type: 'text', text: item.content || '请查看下面的图片。' }, ...urls.flatMap((url, index) => [{ type: 'text', text: `下面是图${index + 1}：` }, { type: 'image_url', image_url: { url } }])];
+        return { role: item.role, content };
+      });
+      const response = await fetchJson('/rh-llm/v1/chat/completions', { method: 'POST', headers: runninghubHeaders(chat.platform), body: JSON.stringify({ model: chat.model, stream: false, messages: mapped, max_tokens: 20000, temperature: .6 }) }, '聊天');
+      return { response, answer: chatAnswerOf(response) };
+    }
+    if (/gemini-3\.(?:5|8)-flash/i.test(chat.model)) {
+      const contents = [];
+      for (const item of history) {
+        const parts = item.images.length
+          ? [...item.images.map(url => geminiPart(url)).filter(Boolean), { text: item.content || '请查看下面的图片，并结合上面的对话继续回答。' }]
+          : [{ text: item.content || '' }];
+        const role = item.role === 'assistant' ? 'model' : 'user';
+        const last = contents[contents.length - 1];
+        if (last && last.role === role) last.parts.push(...parts);
+        else contents.push({ role, parts });
+      }
+      const response = await fetchJson(`/v1beta/models/${encodeURIComponent(chat.model)}:generateContent`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': rawApiKey(), 'X-Grsai-Host': apiHost() }, body: JSON.stringify({ contents, generationConfig: { temperature: .7, maxOutputTokens: 20000 } }) }, '聊天');
+      return { response, answer: geminiTextOf(response) };
+    }
+    const mapped = history.map(item => item.images.length
+      ? { role: item.role, content: [{ type: 'text', text: item.content || '请查看下面的图片。' }, ...item.images.flatMap((url, index) => [{ type: 'text', text: `下面是图${index + 1}：` }, { type: 'image_url', image_url: { url } }])] }
+      : { role: item.role, content: item.content || '' });
+    const response = await fetchJson('/v1/chat/completions', { method: 'POST', headers: headers(), body: JSON.stringify({ model: chat.model, stream: false, messages: mapped, max_tokens: 20000, temperature: .7 }) }, '聊天');
+    return { response, answer: chatAnswerOf(response) };
+  }
+  async function sendChat() {
+    const chat = activeChat();
+    if (send.disabled) return;
+    const content = input.value.trim();
+    const images = pendingImages.slice();
+    if (!content && !images.length) return;
+    const useRunninghub = isRunninghubPlatform(chat.platform);
+    const key = useRunninghub ? runninghubKeyValue() : rawApiKey();
+    if (!key) { setChatStatus(`请先在图片生成的 API 设置中填写 ${useRunninghub ? 'RunningHub' : 'Grsai'} API Key。`, 'fail'); return; }
+    chat.messages.push({ role: 'user', content, ...(images.length ? { images } : {}), createdAt: Date.now() });
+    updateChatTitle(chat); chat.updatedAt = Date.now();
+    input.value = ''; pendingImages = []; renderPendingImages();
+    saveChats(); renderChats();
+    send.disabled = true; send.textContent = '发送中...'; setChatStatus(`正在调用 ${chat.model}...`, 'busy');
+    try {
+      const { response, answer } = await requestChatAnswer(chat);
+      const text = typeof answer === 'string' ? answer.trim() : '';
+      if (!text) throw new Error(nestedErrorMessage(response) || '模型没有返回内容');
+      chat.messages.push({ role: 'assistant', content: text, createdAt: Date.now() });
+      chat.updatedAt = Date.now(); saveChats(); renderChats(); setChatStatus(`已使用 ${chat.model} 回复。`, 'ok');
+    } catch (error) {
+      setChatStatus(error?.message || String(error), 'fail');
+    } finally {
+      send.disabled = false; send.textContent = '发送';
+    }
   }
   chatView.querySelector('#chatNew').onclick=createChat;
-  chatView.querySelector('#chatClear').onclick=()=>{const chat=activeChat();if(!chat.messages.length||confirm('确定清空当前对话吗？')){chat.messages=[];chat.title='新对话';chat.updatedAt=Date.now();saveChats();renderChats();setChatStatus('当前对话已清空。','ok')}};
-  sessionList.onclick=event=>{const id=event.target.closest('[data-chat-id]')?.dataset.chatId;if(id){activeChatId=id;renderChats();}};
+  chatView.querySelector('#chatClear').onclick=()=>{const chat=activeChat();if(!chat.messages.length||confirm('确定清空当前对话吗？')){chat.messages=[];chat.title='新对话';chat.updatedAt=Date.now();pendingImages=[];renderPendingImages();saveChats();renderChats();setChatStatus('当前对话已清空。','ok')}};
+  sessionList.onclick=event=>{const id=event.target.closest('[data-chat-id]')?.dataset.chatId;if(id){activeChatId=id;pendingImages=[];renderPendingImages();renderChats();}};
   platform.onchange=()=>{const chat=activeChat();chat.platform=platform.value;chat.model=modelsFor(chat.platform)[0][0];chat.updatedAt=Date.now();saveChats();renderChats();};
   model.onchange=()=>{const chat=activeChat();chat.model=model.value;chat.updatedAt=Date.now();saveChats();};
   chatView.querySelector('#chatComposer').onsubmit=event=>{event.preventDefault();sendChat();};
   input.onkeydown=event=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat();}};
+  attachButton.onclick = () => imageFile.click();
+  imageFile.onchange = () => { const files = [...(imageFile.files || [])]; imageFile.value = ''; void addChatImages(files); };
+  attachList.onclick = event => { const button = event.target.closest('[data-chat-attach-remove]'); if (!button) return; const index = Number(button.dataset.chatAttachRemove); if (Number.isInteger(index) && index >= 0) { pendingImages.splice(index, 1); renderPendingImages(); } };
+  composer.addEventListener('dragover', event => { if (event.dataTransfer && [...(event.dataTransfer.items || [])].some(item => item.kind === 'file')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; composer.classList.add('drag-over'); } });
+  composer.addEventListener('dragleave', event => { if (event.target === composer) composer.classList.remove('drag-over'); });
+  composer.addEventListener('drop', event => { composer.classList.remove('drag-over'); const files = [...(event.dataTransfer?.files || [])]; if (!files.length) return; event.preventDefault(); event.stopPropagation(); void addChatImages(files); });
+  document.addEventListener('paste', event => { if (chatView.hidden || !composer.contains(event.target)) return; const files = [...(event.clipboardData?.items || [])].filter(item => item.kind === 'file' && /^image\//.test(item.type || '')).map(item => item.getAsFile()).filter(Boolean); if (!files.length) return; event.preventDefault(); void addChatImages(files); });
+  messages.onclick = event => { const image = event.target.closest('.chat-bubble-images img'); if (image) openLightbox(image.src, image.alt || '聊天图片'); };
   const previousActivate = activateView;
   activateView = function(view) { previousActivate(view); chatView.hidden = view !== 'chat'; if(view==='chat'){document.querySelector('.top span').innerHTML='创作台 / <b>聊天</b>';renderChats();setTimeout(()=>input.focus(),0);} };
   chatNav.onclick=()=>{document.querySelectorAll('.nav button[data-view]').forEach(button=>button.classList.toggle('on',button===chatNav));activateView('chat');};
@@ -1558,7 +1688,7 @@ canvasNodes.addEventListener('input',event=>{const input=event.target.closest('[
 })();
 </script>
 <style>
-.chat-view{padding:18px 26px;overflow:hidden}.chat-layout{height:100%;min-height:560px;display:grid;grid-template-columns:230px minmax(0,1fr);border:1px solid var(--line);background:var(--surface);border-radius:8px;overflow:hidden}.chat-sidebar{border-right:1px solid var(--line);padding:12px;overflow:auto}.chat-new{width:100%;border:1px solid var(--line);background:var(--control);color:var(--text);padding:10px;border-radius:6px;cursor:pointer;text-align:left}.chat-new:hover,.chat-session.active{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 16%,var(--control))}.chat-session-list{display:grid;gap:5px;margin-top:10px}.chat-session{border:1px solid transparent;background:transparent;color:var(--text);border-radius:6px;padding:9px;text-align:left;cursor:pointer;overflow:hidden}.chat-session span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.chat-session small{display:block;color:var(--muted);font-size:11px;margin-top:3px}.chat-main{min-width:0;display:grid;grid-template-rows:auto minmax(0,1fr) auto auto}.chat-head{display:flex;justify-content:space-between;gap:12px;padding:16px 18px;border-bottom:1px solid var(--line)}.chat-head .sub{margin:3px 0 0}.chat-models{display:flex;gap:6px;align-items:start}.chat-models select,.chat-models button{height:34px;border:1px solid var(--line);background:var(--control);color:var(--text);border-radius:5px;padding:0 8px}.chat-models button{cursor:pointer}.chat-messages{padding:20px;overflow:auto;background:color-mix(in srgb,var(--surface) 88%,#000)}.chat-message{display:grid;gap:5px;margin:0 0 18px}.chat-message.user{justify-items:end}.chat-role{font-size:11px;color:var(--muted)}.chat-bubble{max-width:min(800px,88%);padding:11px 13px;line-height:1.65;white-space:normal;border:1px solid var(--line);border-radius:7px;background:var(--control);word-break:break-word}.chat-message.user .chat-bubble{background:color-mix(in srgb,var(--accent) 19%,var(--control));border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}.chat-empty{color:var(--muted);text-align:center;padding:55px 12px}.chat-composer{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:12px 18px;border-top:1px solid var(--line)}.chat-composer textarea{min-height:56px;max-height:180px}.chat-send{align-self:end;border:0;border-radius:6px;background:var(--accent);color:#101114;font-weight:700;padding:10px 16px;cursor:pointer}.chat-send:disabled{opacity:.55;cursor:wait}.chat-status{min-height:28px;padding:0 18px 10px;font-size:12px;color:var(--muted)}.chat-status.ok{color:var(--lime)}.chat-status.fail{color:var(--danger)}@media(max-width:800px){.chat-view{padding:12px;overflow:auto}.chat-layout{grid-template-columns:1fr;min-height:calc(100vh - 88px)}.chat-sidebar{border-right:0;border-bottom:1px solid var(--line);max-height:165px}.chat-head{display:block}.chat-models{margin-top:10px;flex-wrap:wrap}.chat-messages{min-height:320px}.chat-composer{padding:10px}.chat-bubble{max-width:94%}}
+.chat-view{padding:18px 26px;overflow:hidden}.chat-layout{height:100%;min-height:560px;display:grid;grid-template-columns:230px minmax(0,1fr);border:1px solid var(--line);background:var(--surface);border-radius:8px;overflow:hidden}.chat-sidebar{border-right:1px solid var(--line);padding:12px;overflow:auto}.chat-new{width:100%;border:1px solid var(--line);background:var(--control);color:var(--text);padding:10px;border-radius:6px;cursor:pointer;text-align:left}.chat-new:hover,.chat-session.active{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 16%,var(--control))}.chat-session-list{display:grid;gap:5px;margin-top:10px}.chat-session{border:1px solid transparent;background:transparent;color:var(--text);border-radius:6px;padding:9px;text-align:left;cursor:pointer;overflow:hidden}.chat-session span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.chat-session small{display:block;color:var(--muted);font-size:11px;margin-top:3px}.chat-main{min-width:0;display:grid;grid-template-rows:auto minmax(0,1fr) auto auto}.chat-head{display:flex;justify-content:space-between;gap:12px;padding:16px 18px;border-bottom:1px solid var(--line)}.chat-head .sub{margin:3px 0 0}.chat-models{display:flex;gap:6px;align-items:start}.chat-models select,.chat-models button{height:34px;border:1px solid var(--line);background:var(--control);color:var(--text);border-radius:5px;padding:0 8px}.chat-models button{cursor:pointer}.chat-messages{padding:20px;overflow:auto;background:color-mix(in srgb,var(--surface) 88%,#000)}.chat-message{display:grid;gap:5px;margin:0 0 18px}.chat-message.user{justify-items:end}.chat-role{font-size:11px;color:var(--muted)}.chat-bubble{max-width:min(800px,88%);padding:11px 13px;line-height:1.65;white-space:normal;border:1px solid var(--line);border-radius:7px;background:var(--control);word-break:break-word}.chat-message.user .chat-bubble{background:color-mix(in srgb,var(--accent) 19%,var(--control));border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}.chat-empty{color:var(--muted);text-align:center;padding:55px 12px}.chat-composer{display:grid;gap:8px;padding:12px 18px;border-top:1px solid var(--line)}.chat-composer.drag-over{outline:2px dashed var(--accent);outline-offset:-6px;background:color-mix(in srgb,var(--accent) 8%,transparent)}.chat-input-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:8px;align-items:stretch}.chat-attach{align-self:end;height:56px;border:1px solid var(--line);border-radius:6px;background:var(--control);color:var(--text);padding:0 12px;cursor:pointer;white-space:nowrap}.chat-attach:hover{border-color:var(--accent)}.chat-attach:disabled{opacity:.55;cursor:wait}.chat-attach-row{display:flex;align-items:center;gap:10px}.chat-attach-row[hidden]{display:none}.chat-attach-list{display:flex;gap:8px;flex-wrap:wrap}.chat-attach-item{position:relative;width:58px;height:58px;border-radius:6px;overflow:hidden;border:1px solid var(--line)}.chat-attach-item img{width:100%;height:100%;object-fit:cover;display:block}.chat-attach-remove{position:absolute;top:2px;right:2px;width:18px;height:18px;border:0;border-radius:50%;background:rgba(0,0,0,.65);color:#fff;font-size:12px;line-height:1;cursor:pointer;padding:0}.chat-attach-tip{font-size:11px;color:var(--muted)}.chat-composer textarea{min-height:56px;max-height:180px}.chat-send{align-self:end;border:0;border-radius:6px;background:var(--accent);color:#101114;font-weight:700;padding:10px 16px;cursor:pointer}.chat-send:disabled{opacity:.55;cursor:wait}.chat-bubble-images{display:flex;flex-wrap:wrap;gap:6px;max-width:min(800px,88%)}.chat-message.user .chat-bubble-images{justify-content:flex-end}.chat-bubble-images img{width:132px;height:132px;object-fit:cover;border-radius:7px;border:1px solid var(--line);cursor:zoom-in;display:block}.chat-status{min-height:28px;padding:0 18px 10px;font-size:12px;color:var(--muted)}.chat-status.ok{color:var(--lime)}.chat-status.fail{color:var(--danger)}@media(max-width:800px){.chat-view{padding:12px;overflow:auto}.chat-layout{grid-template-columns:1fr;min-height:calc(100vh - 88px)}.chat-sidebar{border-right:0;border-bottom:1px solid var(--line);max-height:165px}.chat-head{display:block}.chat-models{margin-top:10px;flex-wrap:wrap}.chat-messages{min-height:320px}.chat-composer{padding:10px}.chat-bubble{max-width:94%}}
 </style>
 <script>
 (() => {
@@ -1794,6 +1924,106 @@ const DRAFT_KEY = 'aiWorkbenchWorkspaceDraftV2';
 })();
 </script>
 <script>
+// 提示词反推多工作区：标签直接排列在标题下方，与图片生成、视频生成的多工作区保持一致。
+(() => {
+  const host = document.getElementById('reverseWorkspaceTabs');
+  if (!host || typeof renderReverseTemplates !== 'function' || typeof renderSlots !== 'function' || typeof setReverseStatus !== 'function') return;
+  const LIST_KEY = 'aiWorkbenchReverseWorkspacesV1', ACTIVE_KEY = 'aiWorkbenchReverseActiveV1', REFS_STORE = 'reverseRefSlots';
+  const tag = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+  const readJson = (key, fallback) => { try { const value = JSON.parse(localStorage.getItem(key)); return value === null || value === undefined ? fallback : value; } catch { return fallback; } };
+  const store = (key, value) => { try { localStorage.setItem(key, value); return true; } catch { return false; } };
+  const newKey = () => (window.crypto && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const field = id => document.getElementById(id);
+  const refArray = source => Array.from({ length: 10 }, (_, index) => (Array.isArray(source) && typeof source[index] === 'string' ? source[index] : ''));
+  const pick = (element, value) => { const text = value === undefined || value === null ? '' : String(value); if (element && text && [...element.options].some(option => option.value === text)) element.value = text; };
+  const statusKind = value => { const parts = String(value || '').split(/\s+/); return parts.includes('fail') ? 'fail' : parts.includes('busy') ? 'busy' : parts.includes('ok') ? 'ok' : ''; };
+  const defaultResult = reverseResult ? reverseResult.textContent : '';
+  let workspaces = (readJson(LIST_KEY, []) || []).filter(item => item && typeof item === 'object' && item.key).map(item => ({ key: String(item.key), name: String(item.name || '提示词'), state: item.state && typeof item.state === 'object' ? item.state : {} }));
+  let activeKey = String(localStorage.getItem(ACTIVE_KEY) || '');
+
+  const snapshot = () => ({
+    refs: refArray(reverseRefs), model: reverseModel?.value || '', templateKey: selectedReverseTemplateKey || '',
+    instruction: reverseInstruction?.value || '', result: reverseResult?.textContent || '',
+    resultEmpty: reverseResult ? reverseResult.classList.contains('empty') : true,
+    copyDisabled: reverseCopy ? !!reverseCopy.disabled : true,
+    statusText: reverseStatus?.textContent || '', statusClass: reverseStatus?.className || ''
+  });
+
+  const applyState = rawState => {
+    const state = rawState && typeof rawState === 'object' ? rawState : {};
+    reverseRefs = refArray(state.refs);
+    store(REFS_STORE, JSON.stringify(reverseRefs));
+    reverseSlot = 0; pasteTarget = null;
+    renderSlots();
+    updatePlatformUI();
+    pick(reverseModel, state.model);
+    selectedReverseTemplateKey = typeof state.templateKey === 'string' ? state.templateKey : '';
+    renderReverseTemplates();
+    if (reverseInstruction) reverseInstruction.value = typeof state.instruction === 'string' ? state.instruction : '';
+    const text = typeof state.result === 'string' ? state.result : '';
+    if (reverseResult) { reverseResult.textContent = text || defaultResult; reverseResult.classList.toggle('empty', !text || state.resultEmpty === true); }
+    if (reverseCopy) reverseCopy.disabled = !text || state.copyDisabled !== false;
+    setReverseStatus(typeof state.statusText === 'string' ? state.statusText : '', statusKind(state.statusClass));
+  };
+
+  const saveActive = () => { const current = workspaces.find(item => item.key === activeKey); if (current) current.state = snapshot(); };
+  const persist = () => {
+    store(LIST_KEY, JSON.stringify(workspaces.map(item => ({ key: item.key, name: item.name, state: item.state }))));
+    store(ACTIVE_KEY, activeKey);
+  };
+  const render = () => {
+    host.innerHTML = workspaces.map(item => `<button type="button" role="tab" aria-selected="${item.key === activeKey}" class="canvas-workspace-tab${item.key === activeKey ? ' active' : ''}" data-reverse-tab="${tag(item.key)}"><span>${tag(item.name)}</span><span class="canvas-workspace-close" data-reverse-close="${tag(item.key)}" aria-label="关闭${tag(item.name)}">×</span></button>`).join('')
+      + '<button type="button" class="canvas-workspace-new" id="reverseNewWorkspace">＋ 新建工作区</button>';
+  };
+  const activate = key => { activeKey = key; const target = workspaces.find(item => item.key === key); applyState(target ? target.state : {}); };
+  const addWorkspace = name => {
+    saveActive();
+    const item = { key: newKey(), name: String(name || '').trim() || `提示词 ${workspaces.length + 1}`, state: {} };
+    workspaces.push(item); activate(item.key); persist(); render();
+    return item.key;
+  };
+  const closeWorkspace = key => {
+    if (workspaces.length <= 1) {
+      const only = workspaces[0];
+      only.state = {}; only.name = '提示词 1';
+      activate(only.key); persist(); render();
+      return;
+    }
+    saveActive();
+    const index = workspaces.findIndex(item => item.key === key);
+    if (index < 0) return;
+    workspaces.splice(index, 1);
+    if (key === activeKey) activate(workspaces[0].key);
+    persist(); render();
+  };
+
+  host.addEventListener('click', event => {
+    if (event.target.closest('#reverseNewWorkspace')) { event.preventDefault(); addWorkspace(); return; }
+    const close = event.target.closest('[data-reverse-close]');
+    if (close) { event.preventDefault(); event.stopPropagation(); closeWorkspace(close.dataset.reverseClose); return; }
+    const tab = event.target.closest('[data-reverse-tab]');
+    if (!tab || tab.dataset.reverseTab === activeKey) return;
+    saveActive(); activate(tab.dataset.reverseTab); persist(); render();
+  });
+
+  let saveTimer = 0;
+  const scheduleSave = () => { clearTimeout(saveTimer); saveTimer = setTimeout(() => { saveActive(); persist(); }, 300); };
+  const liveView = field('reverseView');
+  if (liveView) { liveView.addEventListener('input', scheduleSave, true); liveView.addEventListener('change', scheduleSave, true); }
+  if (typeof MutationObserver === 'function') [field('reverseSlots'), field('reverseResult'), field('reverseStatus')].forEach(node => { if (node) new MutationObserver(scheduleSave).observe(node, { childList: true, characterData: true, subtree: true }); });
+
+  if (!workspaces.length) workspaces = [{ key: newKey(), name: '提示词 1', state: {} }];
+  if (!workspaces.some(item => item.key === activeKey)) activeKey = workspaces[0].key;
+  // 启动时把上次活动工作区的内容还原回界面；参考图沿用主脚本按“保留参考图”设置处理后的当前值，避免回填已清空的参考图。
+  const liveRefs = refArray(reverseRefs);
+  const stored = workspaces.find(item => item.key === activeKey);
+  if (stored && stored.state && Object.keys(stored.state).length) applyState({ ...stored.state, refs: liveRefs });
+  else saveActive();
+  persist(); render();
+  window.__reverseWorkspaceTabs = { snapshot: () => { saveActive(); return workspaces; }, apply: applyState, activate, addWorkspace, sync: () => { saveActive(); persist(); render(); }, list: () => workspaces, activeKey: () => activeKey };
+})();
+</script>
+<script>
 // 视频生成模块：独立挂载，不改动图片生成、提示词反推与无限画布逻辑。
 (() => {
   const VIDEO_TASKS_KEY = 'aiWorkbenchVideoTasksV1';
@@ -1842,7 +2072,7 @@ const DRAFT_KEY = 'aiWorkbenchWorkspaceDraftV2';
 
   const videoView = document.createElement('section');
   videoView.id = 'videoView'; videoView.className = 'workspace video-view'; videoView.hidden = true;
-  videoView.innerHTML = `<div class="generation-workspace-tabs" id="videoWorkspaceTabs" role="tablist" aria-label="视频生成工作区"></div><div class="layout"><section class="tasks"><h2>视频任务</h2><div id="videoList"></div></section><section class="panel"><button class="submit" id="videoSubmit" type="button">生成视频</button><div class="submit-status" id="videoStatus" role="status" aria-live="polite"></div><div class="model-row video-row"><select id="videoPlatform" aria-label="视频平台"><option value="grsai">Grsai</option><option value="runninghub">RunningHub 国内</option><option value="runninghub-global">RunningHub 海外</option></select><select id="videoModel" aria-label="视频模型"></select></div><div class="video-settings"><label>比例<select id="videoRatio" aria-label="视频比例"></select></label><label>分辨率<select id="videoResolution" aria-label="视频分辨率"></select></label><label>时长<select id="videoDuration" aria-label="视频时长"></select></label></div><div class="ref"><h4>参考图（可选，最多 9 张，点击或拖入）</h4><input id="videoFile" type="file" accept="image/*" multiple hidden><div class="slots video-slots" id="videoSlots"></div></div><div class="ref audio-ref" hidden><h4>参考音频（可选，最多 3 个，不上传即不做音频参考）</h4><input id="videoAudioFile" type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.flac,.ogg" multiple hidden><div class="slots audio-slots" id="videoAudioSlots"></div></div><div class="ref audio-ref" hidden><h4>参考音频（可选，最多 3 个，不上传即不做音频参考）</h4><input id="videoAudioFile" type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.flac,.ogg" multiple hidden><div class="slots audio-slots" id="videoAudioSlots"></div></div><div class="blank-prompt"><label for="videoPrompt">视频提示词</label><textarea id="videoPrompt" placeholder="描述画面内容、镜头运动、节奏与声音，例如：深夜雨中的未来都市，镜头从远景推进到人物中景……"></textarea></div><div class="hint" id="videoHint"></div></section></div>`;
+  videoView.innerHTML = `<h1 class="title">视频生成</h1><div class="sub">左侧查看视频任务，右侧选择模型、比例、时长并编辑视频提示词。</div><div class="generation-workspace-tabs" id="videoWorkspaceTabs" role="tablist" aria-label="视频生成工作区"></div><div class="layout"><section class="tasks"><h2>视频任务</h2><div id="videoList"></div></section><section class="panel"><button class="submit" id="videoSubmit" type="button">生成视频</button><div class="submit-status" id="videoStatus" role="status" aria-live="polite"></div><div class="model-row video-row"><select id="videoPlatform" aria-label="视频平台"><option value="grsai">Grsai</option><option value="runninghub">RunningHub 国内</option><option value="runninghub-global">RunningHub 海外</option></select><select id="videoModel" aria-label="视频模型"></select></div><div class="video-settings"><label>比例<select id="videoRatio" aria-label="视频比例"></select></label><label>分辨率<select id="videoResolution" aria-label="视频分辨率"></select></label><label>时长<select id="videoDuration" aria-label="视频时长"></select></label></div><div class="ref"><h4>参考图（可选，最多 9 张，点击或拖入）</h4><input id="videoFile" type="file" accept="image/*" multiple hidden><div class="slots video-slots" id="videoSlots"></div></div><div class="ref audio-ref" hidden><h4>参考音频（可选，最多 3 个，不上传即不做音频参考）</h4><input id="videoAudioFile" type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.flac,.ogg" multiple hidden><div class="slots audio-slots" id="videoAudioSlots"></div></div><div class="ref audio-ref" hidden><h4>参考音频（可选，最多 3 个，不上传即不做音频参考）</h4><input id="videoAudioFile" type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.flac,.ogg" multiple hidden><div class="slots audio-slots" id="videoAudioSlots"></div></div><div class="blank-prompt"><label for="videoPrompt">视频提示词</label><textarea id="videoPrompt" placeholder="描述画面内容、镜头运动、节奏与声音，例如：深夜雨中的未来都市，镜头从远景推进到人物中景……"></textarea></div><div class="hint" id="videoHint"></div></section></div>`;
   document.querySelector('.main')?.append(videoView);
   setupLayoutSplitter(videoView.querySelector('.layout'), 'aiWorkbenchVideoLayoutLeftWidth', 0.55);
 
