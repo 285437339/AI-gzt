@@ -2531,6 +2531,41 @@ const DRAFT_KEY = 'aiWorkbenchWorkspaceDraftV2';
   if (((typeof workbenchSettings === 'undefined' ? '' : workbenchSettings.startupView) || '') === 'video') { document.querySelectorAll('.nav button[data-view]').forEach(button => button.classList.toggle('on', button === navButton)); activateView('video'); }
 })();
 </script>
+<script>
+(() => {
+  const button = document.getElementById('settingsCheckUpdate');
+  const status = document.getElementById('settingsUpdateStatus');
+  if (!button || !status) return;
+  const render = state => {
+    if (!state) return;
+    status.textContent = state.status || '尚未检查更新。';
+    const busy = state.phase === 'checking' || state.phase === 'downloading';
+    const ok = state.phase === 'current' || state.phase === 'available' || state.phase === 'downloaded';
+    status.className = 'settings-status' + (state.phase === 'error' ? ' fail' : busy ? ' busy' : ok ? ' ok' : '');
+  };
+  const refresh = () => {
+    if (!window.workbenchDesktop?.updateStatus) return;
+    window.workbenchDesktop.updateStatus().then(render).catch(() => {});
+  };
+  window.workbenchDesktop?.onUpdateStatus?.(render);
+  button.addEventListener('click', async () => {
+    if (!window.workbenchDesktop?.checkForUpdate) {
+      render({ phase: 'error', status: '当前是网页版，无法检查安装更新。' });
+      return;
+    }
+    button.disabled = true;
+    render({ phase: 'checking', status: '正在检查更新…' });
+    try {
+      render(await window.workbenchDesktop.checkForUpdate());
+    } catch (error) {
+      render({ phase: 'error', status: '检查更新失败：' + (error?.message || String(error)) });
+    } finally {
+      button.disabled = false;
+    }
+  });
+  refresh();
+})();
+</script>
 <style>
 /* 图片生成 / 视频生成的多工作区标签栏：沿用无限画布的画布标签外观。 */
 .generation-workspace-tabs{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 12px;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:var(--surface)}

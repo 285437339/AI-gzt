@@ -20,7 +20,18 @@ async function launch() {
   await page.waitForSelector('#customTemplateSelect');
   return page;
 }
+async function installCloseConfirmationStub(response) {
+  await app.evaluate(({dialog}, response) => {
+    if (!global.workbenchOriginalShowMessageBox) global.workbenchOriginalShowMessageBox = dialog.showMessageBox;
+    dialog.showMessageBox = async (...args) => {
+      const options = args.length > 1 ? args[1] : args[0];
+      if (options?.title === '关闭谢梦雄创作台') return { response };
+      return global.workbenchOriginalShowMessageBox(...args);
+    };
+  }, response);
+}
 async function close() {
+  await installCloseConfirmationStub(0);
   const exited = app.waitForEvent('close', {timeout: 15000});
   await app.evaluate(({BrowserWindow}) => { BrowserWindow.getAllWindows()[0].close(); });
   await exited;
@@ -28,6 +39,11 @@ async function close() {
 }
 (async () => {
   let page = await launch();
+  // Cancelling the close confirmation must keep the workbench open.
+  await installCloseConfirmationStub(1);
+  await app.evaluate(({BrowserWindow}) => { BrowserWindow.getAllWindows()[0].close(); });
+  await page.waitForTimeout(300);
+  assert.equal(await app.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows().length), 1, 'cancel must keep the window open');
   // Establish an acknowledged older snapshot, then close with newer changes
   // still waiting in the application's actual task-save scheduler.
   await page.evaluate(async () => {

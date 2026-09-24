@@ -1,6 +1,6 @@
 {
   "name": "xie-mengxiong-workbench",
-  "version": "1.0.29",
+  "version": "1.0.30",
   "description": "谢梦雄创作台",
   "main": "electron-main.js",
   "private": true,
