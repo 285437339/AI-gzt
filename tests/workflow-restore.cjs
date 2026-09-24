@@ -21,6 +21,13 @@ const dropFile = (page, name, type, bytes, selector = 'body') => page.evaluate(p
   const target = document.querySelector(payload.selector);
   target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
 }, { name, type, bytes, selector });
+const dropUrl = (page, url, selector = 'body') => page.evaluate(payload => {
+  const transfer = new DataTransfer();
+  transfer.setData('text/uri-list', payload.url);
+  transfer.setData('text/plain', payload.url);
+  const target = document.querySelector(payload.selector);
+  target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+}, { url, selector });
 
 (async () => {
   const app = await electron.launch({
@@ -172,7 +179,76 @@ const dropFile = (page, name, type, bytes, selector = 'body') => page.evaluate(p
     await dropFile(page, IMAGE_NAME, 'image/png', [137, 80, 78, 71], '#slots .slot');
     await page.waitForTimeout(300);
     assert.equal(await page.locator('#model').inputValue(), originalModel, '槽位拖放不应触发工作流还原');
+    // 7) 从窗口内部/外部拖入任务生成的缓存图片（绝对 URL）：应新建工作区并载入工作流。
+    const taskImageUrl = await page.evaluate(() => {
+      const url = location.origin + '/cache-media/assets/drop-probe.webp';
+      tasks[0].image = '/cache-media/assets/drop-probe.webp';
+      tasks[0].sourceImage = '/cache-media/assets/drop-probe.webp';
+      assets = [{ key: 'abcdef1234567890', taskKey: tasks[0].key, url: tasks[0].image, sourceUrl: tasks[0].image, thumbnailUrl: tasks[0].image, model: tasks[0].model, createdAt: Date.now(), flowType: 'image', prompt: tasks[0].prompt, refs: [], inspiration: false }];
+      renderTasks();
+      return url;
+    });
+    const beforeCase7 = await page.locator('#imageWorkspaceTabs .canvas-workspace-tab').count();
+    await dropUrl(page, taskImageUrl);
+    await page.waitForTimeout(400);
+    assert.equal(await page.locator('#imageWorkspaceTabs .canvas-workspace-tab').count(), beforeCase7 + 1, '拖入缓存图片的绝对 URL 应新建工作区');
+    assert.equal(await page.locator('#model').inputValue(), 'nano-banana-2', '绝对 URL 拖入应载入对应任务的工作流');
 
+    // 8) 拖入 MIME 为空的生成图片文件（Windows 资源管理器常见）：应新建工作区。
+    const beforeCase8 = await page.locator('#imageWorkspaceTabs .canvas-workspace-tab').count();
+    await dropFile(page, IMAGE_NAME, '', [137, 80, 78, 71]);
+    await page.waitForTimeout(400);
+    assert.equal(await page.locator('#imageWorkspaceTabs .canvas-workspace-tab').count(), beforeCase8 + 1, 'MIME 为空的图片文件应新建工作区');
+
+    // 9) 拖入按缓存文件名（不含任务 key 前 8 位）保存的图片：应新建工作区。
+    const beforeCase9 = await page.locator('#imageWorkspaceTabs .canvas-workspace-tab').count();
+    await dropFile(page, 'drop-probe.webp', 'image/webp', [82, 73, 70, 70]);
+    await page.waitForTimeout(400);
+    assert.equal(await page.locator('#imageWorkspaceTabs .canvas-workspace-tab').count(), beforeCase9 + 1, '按缓存文件名拖入应新建工作区');
+
+    // 10) 拖入资产中心「保存」出来的文件（文件名带资产 key、不含任务 key）：应回到所属任务并新建工作区。
+    const beforeCase10 = await page.locator('#imageWorkspaceTabs .canvas-workspace-tab').count();
+    await dropFile(page, 'nano-banana-2-2026-09-19T10-00-00-000Z-abcdef12.png', '', [137, 80, 78, 71]);
+    await page.waitForTimeout(400);
+    assert.equal(await page.locator('#imageWorkspaceTabs .canvas-workspace-tab').count(), beforeCase10 + 1, '资产保存出来的文件应能回到所属任务并新建工作区');
+
+    // 11) 一次拖入多张不同任务的图片：每张各新建一个工作区并载入各自工作流。
+    await page.evaluate(payload => {
+      tasks.push({
+        key: payload.secondKey, id: 'img-task-2', prompt: '第二个任务', values: {}, fieldNames: {},
+        refs: [], platform: 'grsai', model: 'gpt-image-2-vip', size: '4K', ratio: '1:1', quantity: 1, type: 'person',
+        status: 'succeeded', image: '', error: '', progress: 100, savedPath: 'C:\\generated\\' + payload.secondName, createdAt: Date.now() + 60000
+      });
+      renderTasks();
+    }, { secondKey: 'a1b2c3d4-1111-2222-3333-444455556666', secondName: 'nano-banana-2-2026-09-20T10-00-00-000Z-a1b2c3d4.png' });
+    const beforeCase11 = await page.locator('#imageWorkspaceTabs .canvas-workspace-tab').count();
+    await page.evaluate(payload => {
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([new Uint8Array([137, 80, 78, 71])], payload.first, { type: 'image/png' }));
+      transfer.items.add(new File([new Uint8Array([137, 80, 78, 71])], payload.second, { type: 'image/png' }));
+      document.body.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+    }, { first: IMAGE_NAME, second: 'nano-banana-2-2026-09-20T10-00-00-000Z-a1b2c3d4.png' });
+    await page.waitForTimeout(600);
+    assert.equal(await page.locator('#imageWorkspaceTabs .canvas-workspace-tab').count(), beforeCase11 + 2, '一次拖入两张不同任务的图片应各新建一个工作区');
+    assert.equal(await page.locator('#model').inputValue(), 'gpt-image-2-vip', '最后新建的工作区应载入第二个任务的工作流');
+    assert.equal(await page.locator('#size').inputValue(), '4K', '第二个任务的工作区应恢复自己的尺寸设置');
+    assert.equal(await page.locator('#quantity').inputValue(), '1', '第二个任务的工作区应恢复自己的生成数量');
+
+    // 12) 从任务卡片里把生成结果图片直接拖到窗口内：应新建工作区并载入该任务的工作流。
+    await page.evaluate(payload => {
+      const task = tasks.find(item => item.key === payload.key);
+      task.image = payload.pixel;
+      task.sourceImage = payload.pixel;
+      renderTasks();
+    }, { key: IMAGE_KEY, pixel: PIXEL });
+    await page.waitForTimeout(200);
+    const beforeCase12 = await page.locator('#imageWorkspaceTabs .canvas-workspace-tab').count();
+    await page.dragAndDrop(`#list .task[data-key="${IMAGE_KEY}"] .result img`, '.panel', { targetPosition: { x: 200, y: 30 } });
+    await page.waitForTimeout(500);
+    assert.equal(await page.locator('#imageWorkspaceTabs .canvas-workspace-tab').count(), beforeCase12 + 1, '把任务生成图拖回窗口应新建工作区');
+    assert.equal(await page.locator('#model').inputValue(), 'nano-banana-2', '内部拖拽应载入该任务的工作流');
+    assert.equal(await page.locator('#ratio').inputValue(), '3:4');
+    assert.equal(await page.locator('#quantity').inputValue(), '3');
     assert.deepEqual(errors, [], '页面不应有脚本错误：' + JSON.stringify(errors));
     console.log('PASS: 历史任务「载入工作流」按钮与拖入还原（图片与视频的按钮、拖入都会新建工作区并载入，原工作区保持不变；参数、参考图与参考音频全部恢复）。Screenshot: ' + path.join(profile, 'drag-restore.png'));
   } finally {
