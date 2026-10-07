@@ -46,7 +46,7 @@ const PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQD
     // The UI keeps references as local cache paths; the upstream API cannot read them.
     assert.match(await page.evaluate(() => refs[0]), /^\/cache-media\/references\//);
 
-    for (const model of ['nano-banana-2', 'gpt-image-2.5-sunburst']) {
+    for (const model of ['nano-banana-2', 'nano-banana-2.1', 'gpt-image-2.5-sunburst']) {
       await page.evaluate(value => {
         const select = document.querySelector('#model');
         select.value = value;
@@ -54,7 +54,7 @@ const PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQD
       }, model);
       await page.locator('#fields textarea').first().fill('参考图转换测试 ' + model);
       await page.locator('#submit').click();
-      const expected = model === 'nano-banana-2' ? 1 : 2;
+      const expected = bodies.length + 1;
       for (let waited = 0; bodies.length < expected && waited < 20000; waited += 250) await page.waitForTimeout(250);
       assert.equal(bodies.length, expected, `${model} 未提交生成请求`);
       const body = bodies.at(-1);
@@ -67,6 +67,6 @@ const PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQD
     }
 
     assert.deepEqual(errors, []);
-    console.log('PASS: Grsai nano-banana-2 与 gpt-image-2.5 均以 data URL 提交参考图，不再泄漏 /cache-media 本地路径。Model requests mocked; no paid calls.');
+    console.log('PASS: Grsai nano-banana-2 / nano-banana-2.1 与 gpt-image-2.5 均以 data URL 提交参考图，不再泄漏 /cache-media 本地路径。Model requests mocked; no paid calls.');
   } finally { await app.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

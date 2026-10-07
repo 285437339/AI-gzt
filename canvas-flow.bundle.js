@@ -20873,7 +20873,7 @@ Edge: ${id2}`,
       n.kind === "model" ? h("select", { value: n.value, onChange: (e) => {
         n.value = e.target.value;
         persist(props.store.nodes.value, props.store.edges.value);
-      } }, ["nano-banana-2", "gpt-image-2-vip", "seedream-v5-lite"].map((v) => h("option", { value: v }, v))) : n.kind === "prompt" ? h("textarea", { value: n.value, onInput: (e) => {
+      } }, ["nano-banana-2", "nano-banana-2.1", "gpt-image-2-vip", "seedream-v5-lite"].map((v) => h("option", { value: v }, v))) : n.kind === "prompt" ? h("textarea", { value: n.value, onInput: (e) => {
         n.value = e.target.value;
         persist(props.store.nodes.value, props.store.edges.value);
       } }) : n.kind === "reference" ? h("div", { class: "wf-ref-count" }, `${Array.isArray(n.value) ? n.value.filter(Boolean).length : 0} 张参考图`) : h("div", { class: "wf-node-value" }, String(n.value || "暂无内容").slice(0, 80)),
