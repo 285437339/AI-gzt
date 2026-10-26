@@ -98,6 +98,7 @@ delete env.ELECTRON_RUN_AS_NODE;
 
     // 4) 反推：国内平台走 cn。
     await page.locator('.nav [data-view="reverse"]').click();
+    await page.locator('#reversePlatform').selectOption('runninghub');
     await page.locator('#reverseFile').setInputFiles({ name: 'routing-ref.png', mimeType: 'image/png', buffer: reference });
     await page.waitForFunction(() => reverseRefs[0]?.startsWith('/cache-media/'));
     await page.locator('#reverseSubmit').click();

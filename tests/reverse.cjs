@@ -8,13 +8,20 @@ const env={...process.env,APPDATA:profile,LOCALAPPDATA:profile};delete env.ELECT
  try{
   const page=await app.firstWindow();await page.waitForSelector('#customTemplateSelect');
   const source=await require('sharp')({create:{width:80,height:60,channels:3,background:'#aa5522'}}).png().toBuffer();
+  await page.locator('.nav [data-view="workspace"]').click();
+  await page.locator('#generationPlatform').selectOption('runninghub-global');
+  assert.equal(await page.locator('#apiPlatform').inputValue(),'runninghub-global');
   await page.locator('.nav [data-view="reverse"]').click();
+  await page.locator('#reversePlatform').selectOption('grsai');
+  assert.equal(await page.locator('#generationPlatform').inputValue(),'runninghub-global');
   await page.locator('#reverseFile').setInputFiles({name:'reference.png',mimeType:'image/png',buffer:source});
   await page.waitForFunction(()=>reverseRefs[0]?.startsWith('/cache-media/'));
+  await page.locator('#reverseModel').selectOption('gemini-3.1-pro');
   await page.evaluate(()=>{apiKey.value='test-only';});
   let requests=0;
   await page.route('**/v1beta/models/**',async route=>{
    requests++;
+   assert.match(route.request().url(),new RegExp(`/v1beta/models/${requests===1?'gemini-3\\.1-pro':'gemini-3\\.8-flash'}:generateContent$`));
    const payload=route.request().postDataJSON();
    const images=payload.contents[0].parts.filter(p=>p.inlineData);
    assert.equal(images.length,1);assert.equal(images[0].inlineData.mimeType,'image/jpeg');assert.ok(images[0].inlineData.data.length>100);
@@ -30,7 +37,11 @@ const env={...process.env,APPDATA:profile,LOCALAPPDATA:profile};delete env.ELECT
   await page.locator('#reverseSubmit').click();
   await page.waitForFunction(()=>document.querySelector('#reverseStatus').textContent.includes('反推完成'));
   assert.equal(requests,2);
-  await page.evaluate(()=>{reverseRefs=['/cache-media/references/missing.png'];});
+  await page.reload();await page.waitForSelector('#customTemplateSelect');
+  assert.equal(await page.locator('#generationPlatform').inputValue(),'runninghub-global');
+  assert.equal(await page.locator('#reversePlatform').inputValue(),'grsai');
+  await page.locator('.nav [data-view="reverse"]').click();
+  await page.evaluate(()=>{apiKey.value='test-only';reverseRefs=['/cache-media/references/missing.png'];});
   await page.locator('#reverseSubmit').click();
   await page.waitForFunction(()=>document.querySelector('#reverseStatus').textContent.includes('本地图片读取失败'));
   assert.equal(requests,2);
