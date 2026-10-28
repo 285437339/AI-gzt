@@ -1253,6 +1253,20 @@ canvasNodes.addEventListener('input',event=>{const input=event.target.closest('[
     storageSet(REFS_KEY, JSON.stringify(refs));
     renderSlots();
   };
+  const inferTemplateType = source => {
+    if (['person', 'still', 'blank'].includes(source?.type)) return source.type;
+    const values = source?.values && typeof source.values === 'object' ? source.values : {};
+    if (Object.prototype.hasOwnProperty.call(values, '__blankPrompt')) return 'blank';
+    const personFields = schemas.person.flatMap(group => group[1]);
+    const stillFields = schemas.still.flatMap(group => group[1]);
+    const fieldKeys = [...Object.keys(values), ...Object.keys(source?.fieldNames || {})];
+    if (fieldKeys.some(key => personFields.includes(key))) return 'person';
+    if (fieldKeys.some(key => stillFields.includes(key))) return 'still';
+    const prompt = String(source?.prompt || '');
+    if (/人物特征|服装细节|动作姿态|产品佩戴方式/.test(prompt)) return 'person';
+    if (/视角|布局|景深|产品名称|材质细节|关键标识|背景描述|场景元素|光影设计|画面质感|整体配色|专业词汇/.test(prompt)) return 'still';
+    return 'blank';
+  };
   const resolveTemplateSource = item => {
     const asset = item?.assetKey ? findAsset(item.assetKey) : item?.source === 'asset' ? findAsset(String(item.key || '').replace(/^asset-/, '')) : null;
     const taskKey = asset?.taskKey || item?.taskKey || '';
@@ -1272,7 +1286,7 @@ canvasNodes.addEventListener('input',event=>{const input=event.target.closest('[
     };
   };
   const restoreImageGeneration = item => {
-    const source = resolveTemplateSource(item), savedType = ['person', 'still', 'blank'].includes(source.type) ? source.type : 'person';
+    const source = resolveTemplateSource(item), savedType = inferTemplateType(source);
     const templateKey = String(source.selectedCustomTemplateKey || '');
     if (source.templateSnapshot?.key && !customTemplates.some(template => template.key === source.templateSnapshot.key)) {
       customTemplates.push({ ...source.templateSnapshot, type: source.templateSnapshot.type || savedType });

@@ -24,6 +24,11 @@ const PIXEL='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwA
   assert.equal(await page.evaluate(()=>selectedCustomTemplateKey),'custom-inspiration-template');
   assert.equal(await page.locator('#fields textarea').first().inputValue(),'模板中的人物内容');
   assert.equal(await page.evaluate(()=>refs.length),10);
-  console.log('PASS: 使用图片生成灵感后恢复原人物模板、字段内容和参考图槽位。');
+  await page.evaluate(pixel=>{importedInspirations=[{key:'legacy-blank',url:'data:image/png;base64,'+pixel,title:'旧版纯提示词灵感',prompt:'一只猫坐在窗边，柔和自然光',category:'图片生成'}];assets=[];saveImportedInspirations();renderInspiration();activateView('inspiration');},PIXEL);
+  await page.locator('[data-inspiration-action="use"]').dispatchEvent('click');
+  await page.waitForFunction(()=>!workspaceView.hidden);
+  assert.equal(await page.evaluate(()=>type),'blank');
+  assert.equal(await page.locator('#blankPrompt').inputValue(),'一只猫坐在窗边，柔和自然光');
+  console.log('PASS: 使用灵感可恢复自定义模板，旧版无模板元数据的纯提示词灵感恢复为空白模板。');
  }finally{await app.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
