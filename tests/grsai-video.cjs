@@ -4,6 +4,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+const videoPassword = process.env.WORKBENCH_VIDEO_PASSWORD;
+assert.ok(videoPassword, 'Set WORKBENCH_VIDEO_PASSWORD to run video tests');
 const root = path.resolve(__dirname, '..');
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-video-'));
 const env = { ...process.env, APPDATA: profile, LOCALAPPDATA: profile };
@@ -69,6 +71,8 @@ const waitFor = async (page, list, minimum = 1, timeout = 30000) => {
     const videoNav = page.locator('.nav [data-view="video"]');
     assert.match(await videoNav.innerText(), /视频生成/);
     await videoNav.click();
+    await page.locator('#videoUnlockPassword').fill(videoPassword);
+    await page.locator('#videoUnlockConfirm').click();
     await page.waitForSelector('#videoView:not([hidden])');
     assert.equal(await page.locator('#videoView #videoPrompt').isVisible(), true);
 

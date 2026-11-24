@@ -251,6 +251,7 @@ html[data-skin="dark"] .canvas-toolbar button,html[data-skin="dark"] .canvas-too
  <dialog class="template-name-dialog" id="templateNameDialog"><form method="dialog"><h3>新建模板</h3><label for="templateNameInput">模板名称</label><input id="templateNameInput" autocomplete="off" placeholder="例如：户外人像模板"><div class="template-name-actions"><button value="cancel" type="submit">取消</button><button id="templateNameConfirm" value="default" type="submit">确定</button></div></form></dialog>
  <dialog class="assistant-editor" id="assistantEditorDialog"><form id="assistantEditorForm"><h3 id="assistantEditorTitle">新建提示词</h3><label for="assistantEditorName">名称</label><input id="assistantEditorName" required maxlength="80" placeholder="例如：电商产品主图"><label for="assistantEditorCategory">分类</label><input id="assistantEditorCategory" required maxlength="40" placeholder="例如：常用"><label for="assistantEditorContent">提示词内容</label><textarea id="assistantEditorContent" required placeholder="输入完整提示词"></textarea><div class="assistant-editor-actions"><button id="assistantEditorCancel" type="button">取消</button><button type="submit">保存</button></div></form></dialog>
 <script src="workbench-state.js"></script>
+<script src="video-access.js"></script>
 <script>
 // Keep ordinary image/video tasks out of canvas output nodes.
 (()=>{if(typeof syncCanvasOutput!=='function')return;const original=syncCanvasOutput;syncCanvasOutput=(task,image)=>{if(!task?.canvasOutputNodeId&&!task?.canvasWorkspaceKey&&task?.flowType!=='canvas')return;return original(task,image)}})();
@@ -2334,6 +2335,7 @@ const DRAFT_KEY = 'aiWorkbenchWorkspaceDraftV2';
     throw new Error('视频任务查询超时');
   }
   async function submitVideo() {
+    if (!await window.workbenchVideoAccess.ensure()) return;
     const prompt = (videoPrompt.value || '').trim();
     if (!prompt) { setVideoStatus('请先填写视频提示词。', 'fail'); return; }
     const platform = vPlatform();
@@ -2456,7 +2458,7 @@ const DRAFT_KEY = 'aiWorkbenchWorkspaceDraftV2';
     activateView('video');
     setVideoStatus('已载入该视频任务的工作流，参考图与音频已恢复。', 'ok');
   }
-    function openVideoWorkflowInNewWorkspace(task){const tabs=window.__videoWorkspaceTabs;if(tabs&&typeof tabs.addWorkspace==="function"){try{tabs.addWorkspace(workflowWorkspaceName(task))}catch(error){console.warn("新建视频工作区失败，改为载入当前工作区:",(error&&error.message)||error)}}loadVideoWorkflow(task);try{if(tabs&&typeof tabs.sync==="function")tabs.sync()}catch{}return true}
+    async function openVideoWorkflowInNewWorkspace(task){if(!await window.workbenchVideoAccess.ensure())return false;const tabs=window.__videoWorkspaceTabs;if(tabs&&typeof tabs.addWorkspace==="function"){try{tabs.addWorkspace(workflowWorkspaceName(task))}catch(error){console.warn("新建视频工作区失败，改为载入当前工作区:",(error&&error.message)||error)}}loadVideoWorkflow(task);try{if(tabs&&typeof tabs.sync==="function")tabs.sync()}catch{}return true}
   window.__workbenchVideoDrop = file => { const task = matchVideoTaskByDroppedFile(file); if (!task) return false; openVideoWorkflowInNewWorkspace(task); return true; };
   window.__workbenchVideoDropUrl = url => { const target = String(url || '').trim(); if (!target) return false; const task = videoTasks.find(item => item.url && item.url === target); if (!task) return false; openVideoWorkflowInNewWorkspace(task); return true; };
   videoPlatform.onchange = () => renderVideoModels(true);
@@ -2467,6 +2469,12 @@ const DRAFT_KEY = 'aiWorkbenchWorkspaceDraftV2';
 
   const previousActivateVideo = activateView;
   activateView = function (nextView) {
+    if (nextView === 'video' && !window.workbenchVideoAccess.isUnlocked()) {
+      activateView('workspace');
+      void window.workbenchVideoAccess.ensure().then(unlocked => { if (unlocked) activateView('video'); });
+      return;
+    }
+    document.querySelectorAll('.nav button[data-view]').forEach(button => button.classList.toggle('on', button.dataset.view === nextView));
     previousActivateVideo(nextView);
     videoView.hidden = nextView !== 'video';
     if (nextView === 'video') { document.querySelector('.top span').innerHTML = '创作台 / <b>视频生成</b>'; renderVideoTasks(); }

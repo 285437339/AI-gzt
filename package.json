@@ -1,6 +1,6 @@
 {
   "name": "xie-mengxiong-workbench",
-  "version": "1.0.36",
+  "version": "1.0.37",
   "description": "谢梦雄创作台",
   "main": "electron-main.js",
   "private": true,
@@ -27,6 +27,7 @@
       "canvas-flow.bundle.js",
       "workbench-select.js",
       "workbench-state.js",
+      "video-access.js",
       "workbench-select.css",
       "xie-mengxiong-workbench.css",
       "generated/**/*"

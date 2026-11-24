@@ -3,6 +3,35 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
+const crypto = require('node:crypto');
+
+// Video sessions stay in memory and never enter workspace backups.
+const VIDEO_PASSWORD_HASH = 'e506d36249536d68fdb2271e71a32d2e9762b9f74f85e56237bdab9fb6712c09';
+const videoSessions = new Map();
+async function unlockVideo(req, res) {
+  try {
+    const { password } = JSON.parse(await readBody(req));
+    const digest = crypto.createHash('sha256').update(typeof password === 'string' ? password : '').digest();
+    if (!crypto.timingSafeEqual(digest, Buffer.from(VIDEO_PASSWORD_HASH, 'hex'))) {
+      return sendJson(res, 403, { error: '密码不正确，请重新输入。' });
+    }
+    for (const [token, expiry] of videoSessions) if (expiry <= Date.now()) videoSessions.delete(token);
+    if (videoSessions.size >= 1024) videoSessions.delete(videoSessions.keys().next().value);
+    const token = crypto.randomBytes(32).toString('hex');
+    videoSessions.set(token, Date.now() + 24 * 60 * 60 * 1000);
+    res.setHeader('Cache-Control', 'no-store');
+    return sendJson(res, 200, { token });
+  } catch { return sendJson(res, 400, { error: '无法验证密码，请重试。' }); }
+}
+function authorizeVideoRequest(req, res, route, body) {
+  let model = '';
+  try { model = String(JSON.parse(String(body || '{}')).model || ''); } catch {}
+  const isVideo = /(?:text|image|reference)-to-video|rhart-video/i.test(route) || /^minimax-h3$/i.test(model);
+  if (!isVideo) return true;
+  if ((videoSessions.get(req.headers['x-workbench-video-token']) || 0) > Date.now()) return true;
+  sendJson(res, 403, { code: 'VIDEO_LOCKED', error: '请先输入密码解锁视频功能。' });
+  return false;
+}
 
 const PORT = Number(process.env.AI_WORKBENCH_PORT || 4173);
 const UPSTREAM_HOST = process.env.GRSAI_API_HOST || 'grsai.dakka.com.cn';
@@ -263,6 +292,7 @@ function forwardHeader(source, target, sourceName, targetName = sourceName) {
 }
 
 function proxyRequest(req, res, route, body) {
+  if (!authorizeVideoRequest(req, res, route, body)) return;
   const payload = body || '';
   const requestedHost = String(req.headers['x-grsai-host'] || '').toLowerCase();
   const upstreamHost = ALLOWED_UPSTREAM_HOSTS.has(requestedHost) ? requestedHost : UPSTREAM_HOST;
@@ -333,6 +363,7 @@ function readBody(req) {
 }
 
 function proxyToHost(req, res, hostname, route, body, contentType = 'application/json') {
+  if (!authorizeVideoRequest(req, res, route, body)) return;
   const payload = body || '';
   const headers = {
     'Content-Type': contentType,
@@ -512,6 +543,10 @@ async function storeInspirationMedia(req, res) {
 }
 
 const server = http.createServer((req, res) => {
+  if (req.method === 'POST' && req.url === '/api/video-unlock') {
+    void unlockVideo(req, res);
+    return;
+  }
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
