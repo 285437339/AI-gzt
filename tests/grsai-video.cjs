@@ -67,7 +67,8 @@ const waitFor = async (page, list, minimum = 1, timeout = 30000) => {
 
     await page.evaluate(() => { apiKey.value = 'test-only'; runninghubKey.value = 'test-only-key'; });
 
-    // 1) 导航：视频生成入口与独立视图。
+    // 1) 从音视频工具进入视频生成视图。
+    await page.getByRole('button', { name: '音视频工具', exact: true }).click();
     const videoNav = page.locator('.nav [data-view="video"]');
     assert.match(await videoNav.innerText(), /视频生成/);
     await videoNav.click();

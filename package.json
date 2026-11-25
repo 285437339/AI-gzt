@@ -1,6 +1,6 @@
 {
   "name": "xie-mengxiong-workbench",
-  "version": "1.0.37",
+  "version": "1.0.38",
   "description": "谢梦雄创作台",
   "main": "electron-main.js",
   "private": true,
@@ -28,6 +28,8 @@
       "workbench-select.js",
       "workbench-state.js",
       "video-access.js",
+      "media-tools.js",
+      "media-tools.css",
       "workbench-select.css",
       "xie-mengxiong-workbench.css",
       "generated/**/*"
@@ -61,6 +63,7 @@
     "@vue-flow/core": "^1.48.2",
     "@vue-flow/minimap": "^1.5.4",
     "electron-updater": "^6.8.9",
+    "esdk-obs-nodejs": "3.26.10",
     "sharp": "^0.35.4",
     "vue": "^3.5.13"
   }

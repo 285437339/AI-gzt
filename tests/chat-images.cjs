@@ -14,6 +14,8 @@ const file=(name,w,h,color)=>png(w,h,color).then(buffer=>({name,mimeType:'image/
     await page.waitForSelector('#customTemplateSelect');
     await page.locator('.nav [data-view="chat"]').click();
     await page.waitForSelector('#chatAttachButton');
+    assert.deepEqual(await page.locator('#chatModel option').evaluateAll(options=>options.map(option=>option.value)),
+      ['gemini-3.8-flash','gpt-6.2-astra','gpt-6.2-sol','gpt-6-astra']);
     assert.equal(await page.locator('#chatAttachRow').isHidden(),true,'未选图时不显示缩略图行');
 
     const calls={gemini:[],openai:[]};
@@ -64,13 +66,14 @@ const file=(name,w,h,color)=>png(w,h,color).then(buffer=>({name,mimeType:'image/
     assert.match(await page.locator('.chat-session').first().textContent(),/看看这张图|先问一个问题/,'标题取自首条用户消息');
 
     // 3b. 换非 Gemini 模型 → chat/completions 的 image_url 多模态负载
-    await page.locator('#chatModel').selectOption('gpt-5.6-sol');
+    await page.locator('#chatModel').selectOption('gpt-6.2-sol');
     await page.locator('#chatImageFile').setInputFiles([await file('d.png',50,50,'#778899')]);
     await page.waitForFunction(()=>document.querySelectorAll('#chatAttachList .chat-attach-item').length===1);
     await page.locator('#chatInput').fill('再换一个模型看看');
     await page.locator('#chatSend').click();
     await page.waitForFunction(()=>document.querySelector('#chatStatus').textContent.includes('已使用'));
     const multimodal=calls.openai.at(-1).messages.at(-1);
+    assert.equal(calls.openai.at(-1).model,'gpt-6.2-sol');
     assert.ok(Array.isArray(multimodal.content),'多模态消息 content 为数组');
     const imageParts=multimodal.content.filter(part=>part.type==='image_url');
     assert.equal(imageParts.length,1,'请求里带 1 张图');

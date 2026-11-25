@@ -97,7 +97,13 @@ const dropUrl = (page, url, selector = 'body') => page.evaluate(payload => {
     await page.screenshot({ path: path.join(profile, 'image-load.png') });
 
     // 3) 视频任务卡片上的「载入工作流」按钮与恢复效果。
+    await page.getByRole('button', { name: '音视频工具', exact: true }).click();
     await page.locator('.nav [data-view="video"]').click();
+    const unlockPassword = page.locator('#videoUnlockPassword');
+    await unlockPassword.waitFor();
+    assert.ok(process.env.WORKBENCH_VIDEO_PASSWORD, 'Set WORKBENCH_VIDEO_PASSWORD to run video workflow tests');
+    await unlockPassword.fill(process.env.WORKBENCH_VIDEO_PASSWORD);
+    await unlockPassword.press('Enter');
     await page.waitForSelector('#videoView:not([hidden])');
     const videoLoad = page.locator('#videoList [data-video-action="load"]').first();
     await videoLoad.waitFor({ timeout: 15000 });

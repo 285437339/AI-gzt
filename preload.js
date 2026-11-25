@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('workbenchDesktop', {
+  downloadMedia: url => ipcRenderer.invoke('workbench:download-media', url),
   updateStatus: () => ipcRenderer.invoke('workbench:update-status'),
   checkForUpdate: () => ipcRenderer.invoke('workbench:check-update'),
   onUpdateStatus: callback => {

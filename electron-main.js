@@ -336,6 +336,15 @@ async function createWindow() {
 
 ipcMain.handle('workbench:update-status', () => updateSnapshot());
 ipcMain.handle('workbench:check-update', () => performUpdateCheck(true));
+ipcMain.handle('workbench:download-media', (event, value) => {
+  const frame = event.senderFrame;
+  if (event.sender !== mainWindow?.webContents || !frame || frame.parent ||
+    new URL(frame.url).origin !== 'http://127.0.0.1:' + port) throw new Error('Invalid download origin');
+  if (typeof value !== 'string' || value.length > 8192) throw new Error('Invalid download URL');
+  const url = new URL(value);
+  if (url.protocol !== 'https:' || url.username || url.password) throw new Error('Invalid download URL');
+  event.sender.downloadURL(url.href);
+});
 
 const ownsInstance = app.requestSingleInstanceLock();
 if (!ownsInstance) app.quit();

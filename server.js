@@ -4,6 +4,9 @@ const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
 const crypto = require('node:crypto');
+const os = require('node:os');
+const { Transform } = require('node:stream');
+const { pipeline } = require('node:stream/promises');
 
 // Video sessions stay in memory and never enter workspace backups.
 const VIDEO_PASSWORD_HASH = 'e506d36249536d68fdb2271e71a32d2e9762b9f74f85e56237bdab9fb6712c09';
@@ -15,22 +18,318 @@ async function unlockVideo(req, res) {
     if (!crypto.timingSafeEqual(digest, Buffer.from(VIDEO_PASSWORD_HASH, 'hex'))) {
       return sendJson(res, 403, { error: '密码不正确，请重新输入。' });
     }
-    for (const [token, expiry] of videoSessions) if (expiry <= Date.now()) videoSessions.delete(token);
+    for (const [token, session] of videoSessions) if (session.expires <= Date.now()) videoSessions.delete(token);
     if (videoSessions.size >= 1024) videoSessions.delete(videoSessions.keys().next().value);
     const token = crypto.randomBytes(32).toString('hex');
-    videoSessions.set(token, Date.now() + 24 * 60 * 60 * 1000);
+    videoSessions.set(token, { expires: Date.now() + 24 * 60 * 60 * 1000 });
     res.setHeader('Cache-Control', 'no-store');
     return sendJson(res, 200, { token });
   } catch { return sendJson(res, 400, { error: '无法验证密码，请重试。' }); }
+}
+function getVideoSession(req) {
+  const token = req.headers['x-workbench-video-token'];
+  const session = videoSessions.get(token);
+  if (session?.expires > Date.now()) return session;
+  if (session) videoSessions.delete(token);
+  return null;
 }
 function authorizeVideoRequest(req, res, route, body) {
   let model = '';
   try { model = String(JSON.parse(String(body || '{}')).model || ''); } catch {}
   const isVideo = /(?:text|image|reference)-to-video|rhart-video/i.test(route) || /^minimax-h3$/i.test(model);
   if (!isVideo) return true;
-  if ((videoSessions.get(req.headers['x-workbench-video-token']) || 0) > Date.now()) return true;
+  if (getVideoSession(req)) return true;
   sendJson(res, 403, { code: 'VIDEO_LOCKED', error: '请先输入密码解锁视频功能。' });
   return false;
+}
+
+const soundViewClock = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+});
+function requestSoundView({ appKey, appSecret }, route, body) {
+  const payload = body === undefined ? '' : JSON.stringify(body);
+  const date = Object.fromEntries(soundViewClock.formatToParts(new Date()).map(part => [part.type, part.value]));
+  const time = [date.year, date.month, date.day, date.hour, date.minute, date.second].join('');
+  const sign = crypto.createHash('md5').update([appSecret, payload, time, appKey, appSecret].join('_')).digest('hex').toUpperCase();
+  return new Promise((resolve, reject) => {
+    const request = https.request({
+      hostname: 'soundviewai.com', path: '/antelope-media/openapi/v1/' + route,
+      method: body === undefined ? 'GET' : 'POST',
+      headers: { 'Content-Type': 'application/json', appKey, time, sign,
+        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}) }
+    }, response => {
+      const chunks = [];
+      let size = 0;
+      response.on('data', chunk => {
+        size += chunk.length;
+        if (size > 12 * 1024 * 1024) {
+          request.destroy(new Error('SIZE'));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on('error', reject);
+      response.on('end', () => {
+        try {
+          // The SDK schema permits int64 IDs. Preserve the exact token rather than a rounded Number.
+          const data = JSON.parse(Buffer.concat(chunks).toString('utf8'), (key, value, context) =>
+            ['id', 'taskId', 'fileId', 's3Id'].includes(key) && typeof value === 'number'
+              ? context?.source && /^\d+$/.test(context.source) ? context.source : Number.isSafeInteger(value) ? String(value) : null
+              : value);
+          if ([10001, 10003, 10004].includes(Number(data?.code))) throw new Error('AUTH');
+          if (Number(data?.code) === 10002) throw new Error('CLOCK');
+          if ([401, 403].includes(response.statusCode)) throw new Error('AUTH');
+          if (response.statusCode !== 200 || Number(data?.code) !== 0) {
+            throw Object.assign(new Error('UPSTREAM'), { remoteCode: Number(data?.code) || null });
+          }
+          resolve(data.result);
+        } catch (error) { reject(error); }
+      });
+    });
+    request.setTimeout(25_000, () => request.destroy(new Error('TIMEOUT')));
+    request.on('error', reject);
+    request.end(payload || undefined);
+  });
+}
+
+async function requestSoundViewVoices(config) {
+  const rows = await requestSoundView(config, 'common/timbre/list');
+  if (!Array.isArray(rows)) throw new Error('UPSTREAM');
+  const trimmed = (value, limit) => typeof value === 'string' ? value.trim().slice(0, limit) : '';
+  return rows.flatMap(row => {
+    const id = trimmed(row?.id, 160);
+    const name = trimmed(row?.name, 160);
+    const lang = trimmed(row?.lang, 16).toLowerCase();
+    if (!id || !name || !lang || Number(row.status) === 1) return [];
+    const auditionUrl = safeMediaUrl(row.auditionUrl);
+    const tags = [row.genderStr, row.accentStr, row.ageRangeStr, row.emotionStr,
+      ...(Array.isArray(row.categoryStrList) ? row.categoryStrList.slice(0, 8) : [])];
+    return [{ id, name, lang, auditionUrl, note: trimmed(row.remark, 400),
+      tags: [...new Set(tags.map(value => trimmed(value, 50)).filter(Boolean))] }];
+  });
+}
+
+function soundViewCredentials(value) {
+  const { appKey, appSecret } = value || {};
+  if (typeof appKey !== 'string' || typeof appSecret !== 'string' || !/^[\x21-\x7e]{1,256}$/.test(appKey) ||
+      !/^[\x21-\x7e]{1,512}$/.test(appSecret)) return null;
+  return { appKey, appSecret };
+}
+
+async function readSoundViewCredentials() {
+  try {
+    return soundViewCredentials(JSON.parse(await fs.promises.readFile(SOUNDVIEW_CREDENTIALS_FILE, 'utf8')));
+  } catch (error) {
+    if (error.code === 'ENOENT' || error instanceof SyntaxError) return null;
+    throw error;
+  }
+}
+
+async function saveSoundViewCredentials(credentials) {
+  await fs.promises.mkdir(SETTINGS_DIR, { recursive: true, mode: 0o700 });
+  const temporary = SOUNDVIEW_CREDENTIALS_FILE + '.' + crypto.randomUUID() + '.tmp';
+  try {
+    await fs.promises.writeFile(temporary, JSON.stringify(credentials), { flag: 'wx', mode: 0o600 });
+    await fs.promises.rename(temporary, SOUNDVIEW_CREDENTIALS_FILE);
+  } finally {
+    await fs.promises.rm(temporary, { force: true }).catch(() => {});
+  }
+}
+
+function isLocalSoundViewRequest(req) {
+  if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) return false;
+  try {
+    const host = new URL('http://' + req.headers.host);
+    return host.host === req.headers.host && ['127.0.0.1', 'localhost', '[::1]'].includes(host.hostname) &&
+      (!req.headers.origin || req.headers.origin === host.origin);
+  } catch { return false; }
+}
+
+const videoUploadFormats = new Set(['mp4', 'mov', 'mkv', 'avi', 'm4v', 'webm']);
+const soundViewSourceLanguages = new Set('cn en ja ko ru de fr ar es it pt ms th'.split(' '));
+const soundViewTargetLanguages = new Set([...soundViewSourceLanguages, ...'tl nl vi id no ca bn'.split(' ')]);
+const soundViewDubbingLanguages = new Set('cn en ko tl th ms id'.split(' '));
+const maxVideoUpload = 512 * 1024 * 1024;
+let activeSoundViewUploads = 0;
+
+function soundViewLong(value) {
+  const id = String(value ?? '');
+  if (!/^[1-9]\d{0,18}$/.test(id) || BigInt(id) > 9223372036854775807n) throw new Error('INVALID_ID');
+  return JSON.rawJSON(id);
+}
+
+function safeMediaUrl(value) {
+  try {
+    const url = new URL(value);
+    if (url.protocol === 'https:' && !url.username && !url.password) return url.href;
+  } catch {}
+  return '';
+}
+
+async function uploadSoundViewObject(privilege, file) {
+  const temp = privilege.temporaryAccessKey;
+  const endpoint = new URL('https://' + String(privilege.endPoint || temp?.endPoint || '').replace(/^https:\/\//i, ''));
+  const bucket = privilege.bucketName || temp?.bucketName;
+  if (!/^obs(?:\.[a-z0-9-]+)?\.myhuaweicloud\.com$/.test(endpoint.hostname) ||
+    endpoint.href !== endpoint.origin + '/' || endpoint.port || endpoint.username || endpoint.password ||
+    !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(bucket) ||
+    !temp?.access || !temp.secret || !temp.securitytoken || !privilege.randomName) throw new Error('UPLOAD');
+  const ObsClient = require('esdk-obs-nodejs');
+  const client = new ObsClient({
+    server: endpoint.origin, access_key_id: temp.access, secret_access_key: temp.secret,
+    security_token: temp.securitytoken, timeout: 120, max_retry_count: 0
+  });
+  try {
+    const prefix = privilege.dirPath ? privilege.dirPath.replace(/\/+$/, '') + '/' : '';
+    const result = await client.putObject({ Bucket: bucket, Key: prefix + privilege.randomName, SourceFile: file });
+    if (!(result?.CommonMsg?.Status >= 200 && result.CommonMsg.Status < 300)) throw new Error('UPLOAD');
+  } finally { client.close(); }
+}
+
+async function serveSoundViewMedia(req, res, operation) {
+  const send = (status, data) => sendJson(res, status, data, false);
+  if (!isLocalSoundViewRequest(req)) return send(403, { error: '请在本机工作台使用音视频工具。' });
+  if (req.method !== 'POST') return send(405, { error: '不支持此操作。' });
+  if (!getVideoSession(req)) return send(403, { code: 'VIDEO_LOCKED', error: '请先解锁音视频工具。' });
+  let folder;
+  let uploading = false;
+  try {
+    const config = await readSoundViewCredentials();
+    if (!config) return send(409, { code: 'SOUNDVIEW_SETUP', error: '请先在设置中配置音色服务。' });
+    const call = (route, body) => requestSoundView(config, route, body);
+    if (operation === 'video-translation' || operation === 'video-face-swap') {
+      const faceSwap = operation === 'video-face-swap';
+      const size = Number(req.headers['content-length']);
+      let options;
+      try { options = JSON.parse(decodeURIComponent(req.headers['x-media-options'] || '')); } catch {}
+      const { fileName, originalLang, destLang, timbre, keepBackground } = options || {};
+      const format = typeof fileName === 'string' && path.extname(fileName).slice(1).toLowerCase();
+      if (!videoUploadFormats.has(format) || fileName.length > 255 || /[\\/\x00-\x1f]/.test(fileName) ||
+        !Number.isSafeInteger(size) || size < 1 || size > maxVideoUpload) {
+        return send(400, { error: '请检查视频格式和大小（不超过 512 MB）。' });
+      }
+      const imageUrl = faceSwap ? safeMediaUrl(options.imageUrl) : '';
+      if (faceSwap ? !imageUrl || imageUrl.length > 4096 :
+        !soundViewSourceLanguages.has(originalLang) || !soundViewTargetLanguages.has(destLang) || originalLang === destLang ||
+        typeof timbre !== 'string' || !/^(?:[1-9]\d{0,18}|x5_clone)$/.test(timbre)) {
+        return send(400, { error: faceSwap ? '请输入有效的 HTTPS 人脸图片直链。' : '请检查原始语言、翻译语言和音色。' });
+      }
+      if (activeSoundViewUploads >= 2) return send(429, { error: '正在上传其他视频，请稍后再试。' });
+      activeSoundViewUploads++;
+      uploading = true;
+      folder = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'workbench-media-'));
+      const file = path.join(folder, 'source.' + format);
+      const hash = crypto.createHash('md5');
+      let bytes = 0;
+      await pipeline(req, new Transform({
+        transform(chunk, encoding, callback) {
+          bytes += chunk.length;
+          hash.update(chunk);
+          callback(null, chunk);
+        }
+      }), fs.createWriteStream(file, { flags: 'wx', mode: 0o600 }));
+      if (bytes !== size || res.destroyed) return;
+      const privilege = await call('file/upload/privilege', { fileName, fileMd5: hash.digest('hex'), fileSize: size });
+      const fileId = soundViewLong(privilege?.fileId);
+      if (privilege.temporaryAccessKey) await uploadSoundViewObject(privilege, file);
+      else if (!(privilege.uploadComplete === true || privilege.temporaryAccessKey === null)) throw new Error('UPLOAD');
+      const completed = await call('file/upload/complete', { fileId });
+      if (res.destroyed) return;
+      const s3Id = soundViewLong(completed?.s3Id || privilege.fileId);
+      const result = await call(faceSwap ? 'video/face-swap' : 'video/translate', faceSwap ? {
+        originalFileS3Id: s3Id.rawJSON, imageUrl, videoName: fileName, format
+      } : {
+        originalFileS3Id: s3Id, originalLang, destLang, timbre, videoName: fileName, format,
+        keepBackgroundAudio: keepBackground === true ? 1 : 0
+      });
+      return send(200, { id: soundViewLong(result?.taskId).rawJSON });
+    }
+
+    let body;
+    try { body = JSON.parse(await readBody(req, 128 * 1024)); } catch {
+      return send(400, { error: '请求内容无效或过长。' });
+    }
+    if (operation === 'text-dubbing') {
+      const { text, lang, voice, rate, volume } = body || {};
+      if (typeof text !== 'string' || !text.trim() || text.length > 20_000 ||
+        !soundViewDubbingLanguages.has(lang) || ![rate, volume].every(value => Number.isInteger(value) && value >= 1 && value <= 100)) {
+        return send(400, { error: '请检查配音稿、语言、语速和音量。' });
+      }
+      const result = await call('tts/create', {
+        destLang: lang, timbre: soundViewLong(voice), translateText: text.trim(),
+        ttsConfig: JSON.stringify({ rate, volume })
+      });
+      return send(200, { id: soundViewLong(result?.taskId).rawJSON });
+    }
+    const kind = body?.kind;
+    if (!['text-dubbing', 'video-translation', 'video-face-swap'].includes(kind)) return send(400, { error: '无效的任务类别。' });
+    const result = await call(kind === 'text-dubbing' ? 'tts/get' : 'video/get', { id: soundViewLong(body.id) });
+    const url = safeMediaUrl(result?.destFileTmpUrl);
+    const subtitles = safeMediaUrl(result?.destStrTmpUrl);
+    const state = result?.status;
+    if (kind === 'text-dubbing' ? url : Number(state) === 1 && url) {
+      return send(200, { status: 'completed', url, subtitles });
+    }
+    if (kind === 'text-dubbing' || state == null || [0, 3].includes(Number(state))) {
+      const progress = Number(result?.process);
+      return send(200, { status: 'processing', progress: Number.isFinite(progress) ? Math.min(100, Math.max(0, progress)) : null });
+    }
+    return send(200, { status: 'failed', error: Number(state) === 1
+      ? '任务已完成，但未返回有效的成片。' : `视频处理失败（状态 ${Number(state) || '未知'}）。` });
+  } catch (error) {
+    if (res.destroyed) return;
+    if (error.message === 'AUTH') return send(401, { code: 'SOUNDVIEW_SETUP', error: '音色服务认证失败，请检查设置。' });
+    if (error.message === 'CLOCK') return send(502, { error: '请求时间无效，请检查电脑的日期和时间。' });
+    if (error.message === 'INVALID_ID') return send(400, { error: '音色或任务编号无效。' });
+    if (error.remoteCode === 10014) return send(422, { error: '服务无法解析该视频，请确认视频可以正常播放。' });
+    if (error.remoteCode === 10015) return send(422, { error: '视频有效人声太短，无法克隆原声。' });
+    return send(502, { error: error.remoteCode ? `生成服务未接受请求（错误码 ${error.remoteCode}）。`
+      : error.message === 'UPLOAD' ? '无法上传视频，请检查网络后重试。' : '任务服务暂未响应，请稍后查询或重试。' });
+  } finally {
+    if (uploading) activeSoundViewUploads--;
+    if (folder) await fs.promises.rm(folder, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function serveSoundView(req, res, settings) {
+  const send = (status, data) => sendJson(res, status, data, false);
+  if (!isLocalSoundViewRequest(req)) return send(403, { error: '请在本机工作台使用音色服务。' });
+  const method = req.method;
+  if (!(settings ? ['GET', 'PUT', 'DELETE'] : ['GET']).includes(method)) {
+    return send(405, { error: '不支持此操作。' });
+  }
+  if ((!settings || method !== 'GET') && !getVideoSession(req)) {
+    return send(403, { code: 'VIDEO_LOCKED', error: '请先输入密码解锁音视频工具。' });
+  }
+  let config;
+  if (method === 'PUT') {
+    try { config = soundViewCredentials(JSON.parse(await readBody(req, 4096))); } catch {}
+    if (!config) return send(400, { error: '请填写有效的 AppKey 和 AppSecret。' });
+  }
+  try {
+    if (method === 'DELETE') {
+      await fs.promises.rm(SOUNDVIEW_CREDENTIALS_FILE, { force: true });
+      return send(200, { configured: false });
+    }
+    if (method === 'GET') config = await readSoundViewCredentials();
+    if (settings && method === 'GET') return send(200, { configured: Boolean(config) });
+    if (!config) return send(409, { code: 'SOUNDVIEW_SETUP', error: '尚未配置音色服务凭据。' });
+    const voices = await requestSoundViewVoices(config);
+    if (!settings) return send(200, { voices });
+    await saveSoundViewCredentials(config);
+    return send(200, { configured: true });
+  } catch (error) {
+    if (error.message === 'AUTH') {
+      return send(401, { code: 'SOUNDVIEW_SETUP', error: '音色服务认证失败，请检查 AppKey 和 AppSecret。' });
+    }
+    if (error.syscall && ['open', 'read', 'mkdir', 'rename', 'unlink', 'lstat', 'write'].includes(error.syscall)) {
+      return send(500, { error: '无法读写本机音色服务配置。' });
+    }
+    return send(502, { error: error.message === 'CLOCK'
+      ? '音色服务拒绝了请求时间，请检查电脑的日期和时间。'
+      : '暂时无法加载音色库，请稍后重试。' });
+  }
 }
 
 const PORT = Number(process.env.AI_WORKBENCH_PORT || 4173);
@@ -47,6 +346,7 @@ const UPSTREAM_LOG_FILE = path.join(__dirname, 'upstream-error.log');
 const SETTINGS_DIR = path.join(process.env.APPDATA || process.env.LOCALAPPDATA || path.join(require('os').homedir(), 'AppData', 'Roaming'), 'XieMengxiongWorkbench');
 const WORKBENCH_SETTINGS_FILE = path.join(SETTINGS_DIR, 'workbench-settings.json');
 const WORKBENCH_STATE_FILE = path.join(SETTINGS_DIR, 'workbench-state.json');
+const SOUNDVIEW_CREDENTIALS_FILE = path.join(SETTINGS_DIR, 'soundview-credentials.json');
 const INSPIRATION_DIR = path.join(SETTINGS_DIR, 'inspirations');
 const DEFAULT_MEDIA_CACHE_DIR = path.join(SETTINGS_DIR, 'media-cache');
 const GENERATED_MEDIA_DIR = path.join(SETTINGS_DIR, 'generated-images');
@@ -344,20 +644,25 @@ function proxyRequest(req, res, route, body) {
   upstream.end(payload);
 }
 
-function sendJson(res, status, value) {
+function sendJson(res, status, value, cors = true) {
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
-    'Access-Control-Allow-Origin': '*',
+    ...(cors ? { 'Access-Control-Allow-Origin': '*' } : {}),
     'Cache-Control': 'no-store'
   });
   res.end(JSON.stringify(value));
 }
 
-function readBody(req) {
+function readBody(req, maxSize = Infinity) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on('data', chunk => chunks.push(chunk));
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    let size = 0;
+    req.on('data', chunk => {
+      size += chunk.length;
+      if (size > maxSize) reject(new Error('Request body too large'));
+      else chunks.push(chunk);
+    });
+    req.on('end', () => { if (size <= maxSize) resolve(Buffer.concat(chunks).toString('utf8')); });
     req.on('error', reject);
   });
 }
@@ -547,6 +852,14 @@ const server = http.createServer((req, res) => {
     void unlockVideo(req, res);
     return;
   }
+  if (req.url === '/api/soundview/voices' || req.url === '/api/soundview/settings') {
+    void serveSoundView(req, res, req.url === '/api/soundview/settings');
+    return;
+  }
+  if (/^\/api\/soundview\/media\/(text-dubbing|video-translation|video-face-swap|status)$/.test(req.url)) {
+    void serveSoundViewMedia(req, res, req.url.split('/').at(-1));
+    return;
+  }
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
@@ -692,7 +1005,7 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(PORT, () => {
+server.listen({ port: PORT, host: process.env.AI_WORKBENCH_HOST }, () => {
   ensureMediaCacheDirectory().catch(error => console.warn(`创建媒体缓存目录失败: ${error.message || error}`));
   console.log(`AI workbench: http://localhost:${PORT}`);
 });

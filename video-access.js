@@ -62,10 +62,14 @@
   // Canvas video requests use the same password gate as the video page.
   window.fetch = async (resource, options = {}) => {
     const url = new URL(resource instanceof Request ? resource.url : String(resource), location.href);
-    if (url.origin !== location.origin || !/^\/(rh-api|v1)\//.test(url.pathname)) return originalFetch(resource, options);
+    const method = (options.method || (resource instanceof Request ? resource.method : 'GET')).toUpperCase();
+    const isSoundView = url.pathname === '/api/soundview/voices' ||
+      /^\/api\/soundview\/media\/(?:text-dubbing|video-translation|video-face-swap|status)$/.test(url.pathname) ||
+      (url.pathname === '/api/soundview/settings' && ['PUT', 'DELETE'].includes(method));
+    if (url.origin !== location.origin || (!isSoundView && !/^\/(rh-api|v1)\//.test(url.pathname))) return originalFetch(resource, options);
     let model = '';
     try { model = JSON.parse(options.body || '{}').model || ''; } catch {}
-    if (!/(?:text|image|reference)-to-video|rhart-video/i.test(url.pathname) && !/^minimax-h3$/i.test(model)) return originalFetch(resource, options);
+    if (!isSoundView && !/(?:text|image|reference)-to-video|rhart-video/i.test(url.pathname) && !/^minimax-h3$/i.test(model)) return originalFetch(resource, options);
     if (!await ensure()) throw new Error('视频功能尚未解锁。');
     const headers = new Headers(options.headers || (resource instanceof Request ? resource.headers : undefined));
     headers.set('X-Workbench-Video-Token', token);
