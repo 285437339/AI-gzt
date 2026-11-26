@@ -580,7 +580,7 @@ async function reversePrompt(){
     let data,text;
     if(!runninghub&&/^gemini-/i.test(model)){
       const parts=[{text:instruction},...apiImages.flatMap(item=>[{text:`下面是图${item.index}：`},geminiPart(item.url)]).filter(Boolean)];
-      data=await fetchJson(`/v1beta/models/${encodeURIComponent(model)}:generateContent`,{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key,'X-Grsai-Host':apiHost()},body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:{temperature:.7,maxOutputTokens:20000}})},'提示词反推');
+      data=await fetchJson(`/v1beta/models/${encodeURIComponent(model)}:generateContent`,{method:'POST',headers:headers(),body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:{temperature:.7,maxOutputTokens:20000}})},'提示词反推');
       text=geminiTextOf(data);
     }else{
       // RunningHub accepts public image URLs more reliably than large data URLs on portable clients.
@@ -1713,7 +1713,7 @@ canvasNodes.addEventListener('input',event=>{const input=event.target.closest('[
         if (last && last.role === role) last.parts.push(...parts);
         else contents.push({ role, parts });
       }
-      const response = await fetchJson(`/v1beta/models/${encodeURIComponent(chat.model)}:generateContent`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': rawApiKey(), 'X-Grsai-Host': apiHost() }, body: JSON.stringify({ contents, generationConfig: { temperature: .7, maxOutputTokens: 20000 } }) }, '聊天');
+      const response = await fetchJson(`/v1beta/models/${encodeURIComponent(chat.model)}:generateContent`, { method: 'POST', headers: headers(), body: JSON.stringify({ contents, generationConfig: { temperature: .7, maxOutputTokens: 20000 } }) }, '聊天');
       return { response, answer: geminiTextOf(response) };
     }
     const mapped = history.map(item => item.images.length

@@ -20,6 +20,9 @@ const file=(name,w,h,color)=>png(w,h,color).then(buffer=>({name,mimeType:'image/
 
     const calls={gemini:[],openai:[]};
     await page.route('**/v1beta/models/**',async route=>{
+      const headers=route.request().headers();
+      assert.equal(headers.authorization,'Bearer test-only');
+      assert.equal(headers['x-goog-api-key'],undefined);
       calls.gemini.push(route.request().postDataJSON());
       await route.fulfill({json:{candidates:[{content:{parts:[{text:'已经看到你发的图片。'}]}}]}});
     });

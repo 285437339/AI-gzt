@@ -33,6 +33,9 @@ const env={...process.env,APPDATA:profile,LOCALAPPDATA:profile};delete env.ELECT
   await page.route('**/v1beta/models/**',async route=>{
    requests++;
    assert.match(route.request().url(),/\/v1beta\/models\/gemini-3\.8-flash:generateContent$/);
+   const headers=route.request().headers();
+   assert.equal(headers.authorization,'Bearer test-only');
+   assert.equal(headers['x-goog-api-key'],undefined);
    const payload=route.request().postDataJSON();
    const images=payload.contents[0].parts.filter(p=>p.inlineData);
    assert.equal(images.length,1);assert.equal(images[0].inlineData.mimeType,'image/jpeg');assert.ok(images[0].inlineData.data.length>100);
