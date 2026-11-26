@@ -1,6 +1,6 @@
 {
   "name": "xie-mengxiong-workbench",
-  "version": "1.0.39",
+  "version": "1.0.40",
   "description": "谢梦雄创作台",
   "main": "electron-main.js",
   "private": true,
@@ -32,6 +32,7 @@
       "media-tools.css",
       "workbench-select.css",
       "xie-mengxiong-workbench.css",
+      "tutorial-assets/*.png",
       "generated/**/*"
     ],
     "asar": true,

@@ -62,6 +62,92 @@ const env={...process.env,APPDATA:profile,LOCALAPPDATA:profile};delete env.ELECT
   assert.equal(requests,2);
   await page.evaluate(()=>{reverseRefs=[];});await page.locator('#reverseSubmit').click();
   assert.match(await page.locator('#reverseStatus').textContent(),/请先上传至少/);
-  console.log('PASS GRS model list, Astra image_url, Gemini inlineData, reload reuse, missing file and empty input. Model requests mocked; no paid calls.');
+  await page.unroute('**/v1beta/models/**');
+  await page.locator('#reverseModel').selectOption('gemini-3.8-flash');
+  await page.locator('#reverseBatchMode').check();
+  assert.equal(await page.locator('#reverseTemplateSelect').inputValue(),'builtin:2');
+  const file=(name,buffer=source)=>({name,mimeType:'image/png',buffer});
+  const colored=background=>require('sharp')({create:{width:80,height:60,channels:3,background}}).png().toBuffer();
+  await page.locator('#reverseBatchFiles').setInputFiles([
+   file('sit.png'),file('walk.png',await colored('#2266bb')),file('stand.png',await colored('#22aa77'))
+  ]);
+  await page.waitForFunction(()=>document.querySelector('#reverseBatchCount').textContent.includes('3/9'));
+  await page.locator('#reverseSubmit').click();
+  assert.match(await page.locator('#reverseStatus').textContent(),/图2添加共用产品图/);
+  const productDialog=page.waitForEvent('filechooser');
+  await page.locator('#reverseSlots .slot[data-i="1"]').click();
+  await (await productDialog).setFiles(file('product.png',await colored('#aa22cc')));
+  await page.waitForFunction(()=>document.querySelector('#reverseBatchCount').textContent.includes('共用产品已添加'));
+
+  const calls=[];
+  await page.route('**/v1beta/models/**',async route=>{
+   const parts=route.request().postDataJSON().contents[0].parts;
+   calls.push(parts);
+   if(calls.length===2){await route.fulfill({status:500,json:{message:'测试：第二张失败'}});return}
+   const text=`### 动作\n**动作姿态（包含人物朝向）**：动作 ${calls.length}\n**佩戴方式（重点描述）**：拿法 ${calls.length}\n### 构图\n**视角**：平视\n**布局**：左侧\n**景深**：浅景深\n人物特征：不应写入\n服装细节：不应写入`;
+   await route.fulfill({json:{candidates:[{content:{parts:[{text}]}}]}});
+  });
+  await page.locator('#reverseSubmit').click();
+  await page.waitForFunction(()=>document.querySelector('#reverseStatus').textContent.includes('已反推 2/3 条姿势'));
+  assert.equal(calls.length,3);
+  const expectedImages=await page.evaluate(async ()=>{
+   const prepared=await Promise.all([0,2,3,1].map(index=>prepareImageForApi(reverseRefs[index])));
+   return prepared.map(url=>geminiPart(url).inlineData.data);
+  });
+  calls.forEach((parts,index)=>{
+   assert.deepEqual(parts.filter(part=>part.inlineData).map(part=>part.inlineData.data),[expectedImages[index],expectedImages[3]]);
+   assert.deepEqual(parts.filter(part=>part.text).slice(1).map(part=>part.text),['下面是图1：','下面是图2：']);
+  });
+  const cards=page.locator('.reverse-batch-row');
+  assert.deepEqual(await cards.evaluateAll(rows=>rows.map(row=>row.dataset.poseIndex)),['1','3','4']);
+  assert.match(await cards.nth(1).textContent(),/失败/);
+  assert.equal(await cards.nth(1).locator('button').count(),0);
+  assert.equal(await page.locator('#reverseResult').isHidden(),true);
+  await page.locator('.nav [data-view="workspace"]').click();
+  await page.locator('#customTemplateSelect').selectOption('builtin:person');
+  await page.locator('#template-field-0-0').fill('保留五官');
+  await page.locator('#template-field-0-1').fill('保留服装');
+  await page.locator('#template-field-3-0').fill('保留场景');
+  await page.locator('.nav [data-view="reverse"]').click();
+  const oldPose=await page.locator('#template-field-0-2').inputValue();
+  await cards.nth(0).getByRole('button',{name:'填入识别框'}).click();
+  assert.equal(await page.locator('#workspaceView').isVisible(),true);
+  assert.equal(await page.locator('#promptPoseOnly').count(),0);
+  assert.match(await page.locator('#promptImport').inputValue(),/动作 1/);
+  assert.doesNotMatch(await page.locator('#promptImport').inputValue(),/人物特征|服装细节/);
+  assert.equal(await page.locator('#template-field-0-2').inputValue(),oldPose);
+  await page.locator('#promptParse').click();
+  assert.equal(await page.locator('#template-field-0-2').inputValue(),'动作 1');
+  assert.equal(await page.locator('#template-field-0-3').inputValue(),'拿法 1');
+  assert.equal(await page.locator('#template-field-0-0').inputValue(),'保留五官');
+  assert.equal(await page.locator('#template-field-0-1').inputValue(),'保留服装');
+  assert.equal(await page.locator('#template-field-3-0').inputValue(),'保留场景');
+  await page.locator('.nav [data-view="reverse"]').click();
+  await cards.nth(2).getByRole('button',{name:'填入识别框'}).click();
+  await page.locator('#promptParse').click();
+  assert.equal(await page.locator('#template-field-0-2').inputValue(),'动作 3');
+  await page.locator('#promptImport').fill('动作姿态：直接粘贴的动作\n布局：人物位于右侧');
+  await page.locator('#promptParse').click();
+  assert.equal(await page.locator('#template-field-0-2').inputValue(),'直接粘贴的动作');
+  assert.equal(await page.locator('#template-field-1-1').inputValue(),'人物位于右侧');
+  assert.equal(await page.locator('#template-field-0-0').inputValue(),'保留五官');
+  assert.equal(await page.locator('#template-field-0-1').inputValue(),'保留服装');
+  await page.locator('#promptImport').fill('人物特征：正常填充五官\n服装细节：正常填充服装');
+  await page.locator('#promptParse').click();
+  assert.equal(await page.locator('#template-field-0-0').inputValue(),'正常填充五官');
+  assert.equal(await page.locator('#template-field-0-1').inputValue(),'正常填充服装');
+  await page.locator('.nav [data-view="reverse"]').click();
+  await page.locator('#reverseNewWorkspace').click();
+  assert.equal(await page.locator('#reverseBatchMode').isChecked(),false);
+  await page.locator('[data-reverse-tab]').first().click();
+  assert.equal(await page.locator('#reverseBatchMode').isChecked(),true);
+  assert.equal(await cards.count(),3);
+  await page.evaluate(()=>window.workbenchState.flush());
+  await page.reload();
+  await page.locator('.nav [data-view="reverse"]').click();
+  assert.equal(await page.locator('#reverseBatchMode').isChecked(),true);
+  assert.equal(await cards.count(),3);
+  assert.match(await cards.nth(2).textContent(),/动作 3/);
+  console.log('PASS ordinary reverse, batch pairing, partial failure, automatic pose-only fill, full fill, and workspace restore. Model requests mocked; no paid calls.');
  }finally{await app.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
